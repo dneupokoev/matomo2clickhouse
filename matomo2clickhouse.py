@@ -257,9 +257,10 @@ class Binlog2sql(object):
                                 dv_sql_log = "INSERT INTO `%s`.`log_replication` (`dateid`,`log_time`,`log_file`,`log_pos_start`,`log_pos_end`,`sql_type`)" \
                                              " VALUES (%s,'%s','%s',%s,%s,'%s');" \
                                              % (log_shema, get_dateid(), log_time, stream.log_file, int(log_pos_start), int(log_pos_end), sql_type)
-
+                                #
                                 logger.debug(f"execute sql to clickhouse | begin")
-                                if settings.replication_batch_sql == 0:
+                                if settings.replication_batch_sql == 0 or len(sql.splitlines()) > 1:
+                                    # сюда попадаем если в настройках указали обработку ПОСТРОЧНО или в запросе есть перевод каретки (СТРОК в запросе > 1)
                                     with Client(**self.conn_clickhouse_setting) as ch_cursor:
                                         dv_sql_for_execute = sql
                                         logger.debug(f"{dv_sql_for_execute = }")
