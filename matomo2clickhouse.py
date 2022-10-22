@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # matomo2clickhouse
 # https://github.com/dneupokoev/matomo2clickhouse
-# 221018
+dv_file_version = '221022.00'
 #
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
@@ -47,6 +47,8 @@ logger.info(f'***')
 logger.info(f'BEGIN')
 logger.info(f'{dv_path_main = }')
 logger.info(f'{dv_file_name = }')
+logger.info(f'{dv_file_version = }')
+
 
 
 #
@@ -180,7 +182,8 @@ class Binlog2sql(object):
                                         only_tables=self.only_tables, resume_stream=True, blocking=True,
                                         is_mariadb=False, freeze_schema=True)
             flag_last_event = False
-            dv_sql_for_execute = ''
+            dv_sql_for_execute_list = ''
+            dv_sql_for_execute_last = ''
             if self.flashback:
                 self.log_id = self.log_id - settings.replication_batch_size
                 if self.log_id < 0:
@@ -259,31 +262,47 @@ class Binlog2sql(object):
                                              % (log_shema, get_dateid(), log_time, stream.log_file, int(log_pos_start), int(log_pos_end), sql_type)
                                 #
                                 logger.debug(f"execute sql to clickhouse | begin")
-                                if settings.replication_batch_sql == 0 or len(sql.splitlines()) > 1:
-                                    # сюда попадаем если в настройках указали обработку ПОСТРОЧНО или в запросе есть перевод каретки (СТРОК в запросе > 1)
-                                    with Client(**self.conn_clickhouse_setting) as ch_cursor:
-                                        dv_sql_for_execute = sql
-                                        logger.debug(f"{dv_sql_for_execute = }")
-                                        # выполняем строку sql
-                                        ch_cursor.execute(dv_sql_for_execute)
-                                        dv_sql_for_execute = dv_sql_log
-                                        logger.debug(f"{dv_sql_for_execute = }")
-                                        # выполняем строку sql
-                                        ch_cursor.execute(dv_sql_for_execute)
-                                        dv_sql_for_execute = ''
-                                else:
-                                    dv_sql_for_execute = dv_sql_for_execute + sql + '\n' + dv_sql_log + '\n'
-                                    if (dv_sql_for_execute.count('\n') >= settings.replication_batch_sql) or (
-                                            dv_count_sql_for_ch >= settings.replication_batch_size):
-                                        dv_sql_list_for_execute = dv_sql_for_execute.splitlines()
+                                if (settings.replication_batch_sql == 0) or (len(sql.splitlines()) > 1):
+                                    # сюда попадаем если в настройках указали обработку ПОСТРОЧНО
+                                    # или в запросе есть перевод каретки (СТРОК в запросе > 1)
+                                    # или в запросе есть управляющий символ
+                                    #
+                                    if dv_sql_for_execute_list != '':
+                                        # если ранее уже собрали список запросов, то сначала надо обработать этот список (иначе могут образоваться пропуски данных)
+                                        dv_sql_list_for_execute = dv_sql_for_execute_list.splitlines()
                                         with Client(**self.conn_clickhouse_setting) as ch_cursor:
                                             for dv_sql_line in range(len(dv_sql_list_for_execute)):
                                                 logger.debug(f"{dv_sql_list_for_execute[dv_sql_line] = }")
-                                                # зададим значение dv_sql_for_execute, чтобы в случае ошибки знать на каком именно запросе сломалось
-                                                dv_sql_for_execute = dv_sql_list_for_execute[dv_sql_line]
+                                                # зададим значение dv_sql_for_execute_last, чтобы в случае ошибки знать на каком именно запросе сломалось
+                                                dv_sql_for_execute_last = dv_sql_list_for_execute[dv_sql_line]
                                                 # выполняем строку sql
                                                 ch_cursor.execute(dv_sql_list_for_execute[dv_sql_line])
-                                        dv_sql_for_execute = ''
+                                        dv_sql_for_execute_list = ''
+                                    # далее обрабатываем текущую строку
+                                    with Client(**self.conn_clickhouse_setting) as ch_cursor:
+                                        dv_sql_for_execute_last = sql
+                                        logger.debug(f"{dv_sql_for_execute_last = }")
+                                        # выполняем строку sql
+                                        ch_cursor.execute(dv_sql_for_execute_last)
+                                        dv_sql_for_execute_last = dv_sql_log
+                                        logger.debug(f"{dv_sql_for_execute_last = }")
+                                        # выполняем строку sql
+                                        ch_cursor.execute(dv_sql_for_execute_last)
+                                else:
+                                    # пополняем список запросов и если требуется будем его обрабатывать
+                                    dv_sql_for_execute_list = dv_sql_for_execute_list + sql + '\n' + dv_sql_log + '\n'
+                                    # if (dv_sql_for_execute_list.count('\n') >= settings.replication_batch_sql) or \
+                                    #         (dv_count_sql_for_ch >= settings.replication_batch_size):
+                                    if dv_count_sql_for_ch >= settings.replication_batch_size:
+                                        dv_sql_list_for_execute = dv_sql_for_execute_list.splitlines()
+                                        with Client(**self.conn_clickhouse_setting) as ch_cursor:
+                                            for dv_sql_line in range(len(dv_sql_list_for_execute)):
+                                                logger.debug(f"{dv_sql_list_for_execute[dv_sql_line] = }")
+                                                # зададим значение dv_sql_for_execute_last, чтобы в случае ошибки знать на каком именно запросе сломалось
+                                                dv_sql_for_execute_last = dv_sql_list_for_execute[dv_sql_line]
+                                                # выполняем строку sql
+                                                ch_cursor.execute(dv_sql_list_for_execute[dv_sql_line])
+                                        dv_sql_for_execute_list = ''
                                 logger.debug(f"execute sql to clickhouse | end")
                     #
                     # если обработали заданное "максимальное количество запросов обрабатывать за один вызов", то прерываем цикл
@@ -310,8 +329,8 @@ class Binlog2sql(object):
         #
         except Exception as ERROR:
             f_status = 'ERROR'
-            if dv_sql_for_execute != '':
-                f_text = f"'ERROR = LAST_SQL:\n\n{dv_sql_for_execute}\n\n{ERROR = }"
+            if dv_sql_for_execute_last != '':
+                f_text = f"'ERROR = LAST_SQL:\n\n{dv_sql_for_execute_last}\n\n{ERROR = }"
             else:
                 f_text = f"{ERROR}"
         else:
@@ -484,7 +503,7 @@ if __name__ == '__main__':
                 # пытаться отправить будем только если предыдущие проверки подтвердили необходимость отправки
                 if dv_is_SEND_TELEGRAM_success is True:
                     settings.f_telegram_send_message(tlg_bot_token=settings.TLG_BOT_TOKEN, tlg_chat_id=settings.TLG_CHAT_FOR_SEND,
-                                                     txt_name='matomo2clickhouse',
+                                                     txt_name=f"matomo2clickhouse {dv_file_version}",
                                                      txt_type=dv_for_send_txt_type,
                                                      txt_to_send=f"{dv_for_send_text}",
                                                      txt_mode=None)
