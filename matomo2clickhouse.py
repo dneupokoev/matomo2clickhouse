@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 # matomo2clickhouse
 # https://github.com/dneupokoev/matomo2clickhouse
-dv_file_version = '221022.00'
+dv_file_version = '221022.01'
 #
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 
 import settings
 import os
+import re
 import sys
 import datetime
 import time
@@ -48,9 +49,9 @@ logger.info(f'BEGIN')
 logger.info(f'{dv_path_main = }')
 logger.info(f'{dv_file_name = }')
 logger.info(f'{dv_file_version = }')
-
-
-
+#
+dv_find_text = re.compile(r'(\r|\n|\t|\b)')
+#
 #
 #
 def get_now():
@@ -262,7 +263,7 @@ class Binlog2sql(object):
                                              % (log_shema, get_dateid(), log_time, stream.log_file, int(log_pos_start), int(log_pos_end), sql_type)
                                 #
                                 logger.debug(f"execute sql to clickhouse | begin")
-                                if (settings.replication_batch_sql == 0) or (len(sql.splitlines()) > 1):
+                                if (settings.replication_batch_sql == 0) or (len(sql.splitlines()) > 1) or (dv_find_text.search(sql)):
                                     # сюда попадаем если в настройках указали обработку ПОСТРОЧНО
                                     # или в запросе есть перевод каретки (СТРОК в запросе > 1)
                                     # или в запросе есть управляющий символ
