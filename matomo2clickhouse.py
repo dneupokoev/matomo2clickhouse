@@ -51,6 +51,8 @@ logger.info(f'{dv_file_name = }')
 logger.info(f'{dv_file_version = }')
 #
 dv_find_text = re.compile(r'(\r|\n|\t|\b)')
+
+
 #
 #
 #
@@ -68,11 +70,10 @@ def get_second_between_now_and_datetime(in_datetime_str='2000-01-01 00:00:00'):
     '''
     вернет количество секунд между текущим временем и полученной датой-временем в формате '%Y-%m-%d %H:%M:%S'
     '''
-    tmp_datetime_sart = datetime.datetime.strptime(in_datetime_str, '%Y-%m-%d %H:%M:%S')
+    tmp_datetime_start = datetime.datetime.strptime(in_datetime_str, '%Y-%m-%d %H:%M:%S')
     tmp_now = datetime.datetime.strptime(datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'), '%Y-%m-%d %H:%M:%S')
-    tmp_seconds = int((tmp_now - tmp_datetime_sart).total_seconds())
+    tmp_seconds = int((tmp_now - tmp_datetime_start).total_seconds())
     return tmp_seconds
-
 
 
 def get_disk_space():
@@ -80,7 +81,7 @@ def get_disk_space():
     вернет информацию о свободном месте на диске в гигабайтах
     dv_statvfs_bavail = Количество свободных гагабайтов, которые разрешено использовать обычным пользователям (исключая зарезервированное пространство)
     dv_statvfs_blocks = Размер файловой системы в гигабайтах
-    dv_result_bool = true - корректно отрпботало, false - получить данные не удалось
+    dv_result_bool = true - корректно отработало, false - получить данные не удалось
     '''
     dv_statvfs_blocks = 999999
     dv_statvfs_bavail = dv_statvfs_blocks
@@ -99,19 +100,6 @@ def get_disk_space():
     except:
         pass
     return dv_statvfs_bavail, dv_statvfs_blocks, dv_result_bool
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 class Binlog2sql(object):
