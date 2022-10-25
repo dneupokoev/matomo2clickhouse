@@ -83,12 +83,12 @@ replication_tables = [
     'matomo_log_visit',
     'matomo_site',
     'matomo_site_url',
-    'matomo_tagmanager_container',
-    'matomo_tagmanager_container_release',
-    'matomo_tagmanager_container_version',
-    'matomo_tagmanager_tag',
-    'matomo_tagmanager_trigger',
-    'matomo_tagmanager_variable',
+    # 'matomo_tagmanager_container',
+    # 'matomo_tagmanager_container_release',
+    # 'matomo_tagmanager_container_version',
+    # 'matomo_tagmanager_tag',
+    # 'matomo_tagmanager_trigger',
+    # 'matomo_tagmanager_variable',
 ]
 #
 # таблицы, в которые все update будем менять на insert
