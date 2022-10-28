@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # matomo2clickhouse
 # https://github.com/dneupokoev/matomo2clickhouse
-dv_file_version = '221026.01'
+dv_file_version = '221028.01'
 #
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
@@ -484,6 +484,10 @@ if __name__ == '__main__':
         # print(f"{args = }")
         # print('***')
         #
+        try:
+            logger.info(f"binlog_datetime_start = {args.start_time}")
+        except:
+            pass
         binlog2sql = Binlog2sql(connection_mysql_setting=conn_mysql_setting,
                                 connection_clickhouse_setting=conn_clickhouse_setting,
                                 start_file=args.start_file, start_pos=args.start_pos,
@@ -546,6 +550,12 @@ if __name__ == '__main__':
             # сохраняем файл конфига
             with open(dv_lib_path_ini, mode='w', encoding='utf-8') as configfile:
                 dv_cfg.write(configfile)
+        except:
+            pass
+        try:
+            # получаем позицию binlog-а, до которой обработали (для статистики)
+            log_id, dv_binlog_datetime_end, log_file, log_pos_end = get_ch_param_for_next(connection_clickhouse_setting=conn_clickhouse_setting)
+            logger.info(f"binlog_datetime_end = {dv_binlog_datetime_end}")
         except:
             pass
         #
