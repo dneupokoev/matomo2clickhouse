@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # matomo2clickhouse
 # https://github.com/dneupokoev/matomo2clickhouse
-dv_file_version = '221028.01'
+dv_file_version = '221101.02'
 #
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
@@ -10,6 +10,7 @@ import settings
 import os
 import re
 import sys
+import platform
 import datetime
 import time
 import pymysql
@@ -47,11 +48,17 @@ logger.enable(dv_file_name)  # даем имя логированию
 logger.info(f'***')
 logger.info(f'BEGIN')
 try:
+    # Получаем версию ОС
+    logger.info(f'os.version = {platform.platform()}')
+except Exception as error:
+    # Не удалось получить версию ОС
+    logger.error(f'ERROR - os.version: {error = }')
+try:
     # Получаем версию питона
     logger.info(f'python.version = {sys.version}')
 except Exception as error:
     # Не удалось получить версию питона
-    logger.error(f'ERROR: {error = }')
+    logger.error(f'ERROR - python.version: {error = }')
 logger.info(f'{dv_path_main = }')
 logger.info(f'{dv_file_name = }')
 logger.info(f'{dv_file_version = }')
