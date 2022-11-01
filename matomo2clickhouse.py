@@ -46,6 +46,12 @@ else:
 logger.enable(dv_file_name)  # даем имя логированию
 logger.info(f'***')
 logger.info(f'BEGIN')
+try:
+    # Получаем версию питона
+    logger.info(f'python.version = {sys.version}')
+except Exception as error:
+    # Не удалось получить версию питона
+    logger.error(f'ERROR: {error = }')
 logger.info(f'{dv_path_main = }')
 logger.info(f'{dv_file_name = }')
 logger.info(f'{dv_file_version = }')
