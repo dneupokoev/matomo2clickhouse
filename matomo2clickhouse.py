@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # matomo2clickhouse
 # https://github.com/dneupokoev/matomo2clickhouse
-dv_file_version = '221101.02'
+dv_file_version = '221206.01'
 #
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
@@ -188,32 +188,36 @@ class Binlog2sql(object):
                     self.binlogList.append(binary)
             # оставляем список только из количества файлов, которые разрешили для обработки за 1 раз (в settings.py)
             self.binlogList = self.binlogList[:settings.replication_max_number_files_per_session]
-
+            #
             cursor.execute("SELECT @@server_id")
             self.server_id = cursor.fetchone()[0]
             if not self.server_id:
                 raise ValueError('missing server_id in %s:%s' % (self.conn_mysql_setting['host'], self.conn_mysql_setting['port']))
-
-            # print(f'{self.server_id = }')
-            # print(f'{self.start_file = }')
-            # print(f'{self.start_pos = }')
-            # print(f'{self.end_file = }')
-            # print(f'{self.end_pos = }')
-            # print(f'{self.eof_file = }')
-            # print(f'{self.eof_pos = }')
-            # print(f'{self.binlogList = }')
+            #
+            # выводим список файлов бинлога, которые разрешили для обработки в этом запуске
+            logger.debug(f"{self.server_id = }")
+            logger.debug(f"{self.start_file = }")
+            logger.debug(f"{self.start_pos = }")
+            logger.debug(f"{self.end_file = }")
+            logger.debug(f"{self.end_pos = }")
+            logger.debug(f"{self.eof_file = }")
+            logger.debug(f"{self.eof_pos = }")
+            logger.debug(f"{self.binlogList = }")
 
     def clear_binlog(self, log_time):
-        # print(f"{log_time = }")
-        tmp_LEAVE_BINARY_LOGS_IN_DAYS = datetime.datetime.today() - datetime.timedelta(days=settings.LEAVE_BINARY_LOGS_IN_DAYS)
-        # print(f"{tmp_LEAVE_BINARY_LOGS_IN_DAYS = }")
-        if log_time > tmp_LEAVE_BINARY_LOGS_IN_DAYS:
-            self.connection = pymysql.connect(**self.conn_mysql_setting)
-            with self.connection.cursor() as cursor:
-                tmp_sql_execute = f"PURGE BINARY LOGS BEFORE DATE(NOW() - INTERVAL {settings.LEAVE_BINARY_LOGS_IN_DAYS} DAY) + INTERVAL 0 SECOND"
-                # print(f"{tmp_sql_execute = }")
-                cursor.execute(tmp_sql_execute)
-                logger.info(f"{tmp_sql_execute}")
+        try:
+            logger.debug(f"{settings.LEAVE_BINARY_LOGS_IN_DAYS = }")
+            logger.debug(f"{log_time = }")
+            tmp_LEAVE_BINARY_LOGS_IN_DAYS = datetime.datetime.today() - datetime.timedelta(days=settings.LEAVE_BINARY_LOGS_IN_DAYS)
+            if log_time > tmp_LEAVE_BINARY_LOGS_IN_DAYS:
+                self.connection = pymysql.connect(**self.conn_mysql_setting)
+                with self.connection.cursor() as cursor:
+                    tmp_sql_execute = f"PURGE BINARY LOGS BEFORE DATE(NOW() - INTERVAL {settings.LEAVE_BINARY_LOGS_IN_DAYS} DAY) + INTERVAL 0 SECOND"
+                    # print(f"{tmp_sql_execute = }")
+                    cursor.execute(tmp_sql_execute)
+                    logger.info(f"{tmp_sql_execute}")
+        except Exception as ERROR:
+            logger.error(f"{ERROR = }")
 
     def process_binlog(self):
         dv_time_begin = time.time()
@@ -410,17 +414,18 @@ def get_ch_param_for_next(connection_clickhouse_setting):
     log_time = '1980-01-01 00:00:00'
     log_file = ''
     log_pos_end = 0
-    # print(f"WW - {is_dml_event(binlog_event) = }")
     try:
         dv_ch_client = Client(**connection_clickhouse_setting)
         dv_ch_execute = dv_ch_client.execute(f"SELECT max(dateid) AS id_max FROM {settings.CH_matomo_dbname}.log_replication")
+        log_id_max = dv_ch_execute[0][0]
+        logger.debug(f"{log_id_max = }")
     except Exception as error:
         raise error
     #
     try:
-        log_id_max = dv_ch_execute[0][0]
         ch_result = dv_ch_client.execute(
-            f"SELECT dateid, log_time, log_file, log_pos_end FROM {settings.CH_matomo_dbname}.log_replication WHERE dateid={log_id_max}")
+            f"SELECT dateid, log_time, log_file, log_pos_end FROM {settings.CH_matomo_dbname}.log_replication WHERE dateid={log_id_max} LIMIT 1")
+        logger.debug(f"{ch_result = }")
         log_time = f"{ch_result[0][1].strftime('%Y-%m-%d %H:%M:%S')}"
         log_file = f"{ch_result[0][2]}"
         log_pos_end = int(ch_result[0][3])
