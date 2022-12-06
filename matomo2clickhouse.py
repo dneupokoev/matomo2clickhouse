@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # matomo2clickhouse
 # https://github.com/dneupokoev/matomo2clickhouse
-dv_file_version = '221206.01'
+dv_file_version = '221206.02'
 #
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
@@ -62,6 +62,14 @@ except Exception as error:
 logger.info(f'{dv_path_main = }')
 logger.info(f'{dv_file_name = }')
 logger.info(f'{dv_file_version = }')
+logger.debug(f'{settings.DEBUG = }')
+logger.debug(f'{settings.PATH_TO_LIB = }')
+logger.debug(f'{settings.PATH_TO_LOG = }')
+logger.debug(f'{settings.replication_batch_size = }')
+logger.debug(f'{settings.replication_batch_sql = }')
+logger.debug(f'{settings.replication_max_number_files_per_session = }')
+logger.debug(f'{settings.replication_max_minutes = }')
+logger.debug(f'{settings.LEAVE_BINARY_LOGS_IN_DAYS = }')
 #
 dv_find_text = re.compile(r'(\r|\n|\t|\b)')
 
@@ -73,6 +81,7 @@ def get_now():
     '''
     вернет текущую дату и время в заданном формате
     '''
+    logger.debug(f"get_now")
     dv_time_begin = time.time()
     dv_created = f"{datetime.datetime.fromtimestamp(dv_time_begin).strftime('%Y-%m-%d %H:%M:%S')}"
     # dv_created = f"{datetime.datetime.fromtimestamp(dv_time_begin).strftime('%Y-%m-%d %H:%M:%S.%f')}"
@@ -83,6 +92,7 @@ def get_second_between_now_and_datetime(in_datetime_str='2000-01-01 00:00:00'):
     '''
     вернет количество секунд между текущим временем и полученной датой-временем в формате '%Y-%m-%d %H:%M:%S'
     '''
+    logger.debug(f"get_second_between_now_and_datetime")
     tmp_datetime_start = datetime.datetime.strptime(in_datetime_str, '%Y-%m-%d %H:%M:%S')
     tmp_now = datetime.datetime.strptime(datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'), '%Y-%m-%d %H:%M:%S')
     tmp_seconds = int((tmp_now - tmp_datetime_start).total_seconds())
@@ -96,6 +106,7 @@ def get_disk_space():
     dv_statvfs_blocks = Размер файловой системы в гигабайтах
     dv_result_bool = true - корректно отработало, false - получить данные не удалось
     '''
+    logger.debug(f"get_disk_space")
     dv_statvfs_blocks = 999999
     dv_statvfs_bavail = dv_statvfs_blocks
     dv_result_bool = False
@@ -205,10 +216,11 @@ class Binlog2sql(object):
             logger.debug(f"{self.binlogList = }")
 
     def clear_binlog(self, log_time):
+        logger.debug(f"clear_binlog")
         try:
-            logger.debug(f"{settings.LEAVE_BINARY_LOGS_IN_DAYS = }")
-            logger.debug(f"{log_time = }")
+            logger.debug(f" {log_time = }")
             tmp_LEAVE_BINARY_LOGS_IN_DAYS = datetime.datetime.today() - datetime.timedelta(days=settings.LEAVE_BINARY_LOGS_IN_DAYS)
+            logger.debug(f" {tmp_LEAVE_BINARY_LOGS_IN_DAYS = }")
             if log_time > tmp_LEAVE_BINARY_LOGS_IN_DAYS:
                 self.connection = pymysql.connect(**self.conn_mysql_setting)
                 with self.connection.cursor() as cursor:
@@ -220,8 +232,18 @@ class Binlog2sql(object):
             logger.error(f"{ERROR = }")
 
     def process_binlog(self):
+        logger.debug(f"process_binlog")
         dv_time_begin = time.time()
         dv_count_sql_for_ch = 0
+        log_time = '1980-01-01 00:00:00'
+        logger.debug(f"process_binlog")
+        logger.debug(f"{self.server_id = }")
+        logger.debug(f"{self.start_file = }")
+        logger.debug(f"{self.start_pos = }")
+        logger.debug(f"{self.only_schemas = }")
+        logger.debug(f"{self.only_tables = }")
+        logger.debug(f"{self.only_dml = }")
+        logger.debug(f"{self.sql_type = }")
         try:
             stream = BinLogStreamReader(connection_settings=self.conn_mysql_setting, server_id=self.server_id,
                                         log_file=self.start_file, log_pos=self.start_pos, only_schemas=self.only_schemas,
@@ -230,6 +252,7 @@ class Binlog2sql(object):
             flag_last_event = False
             dv_sql_for_execute_list = ''
             dv_sql_for_execute_last = ''
+            logger.debug(f"{self.flashback = }")
             if self.flashback:
                 self.log_id = self.log_id - settings.replication_batch_size
                 if self.log_id < 0:
@@ -243,26 +266,32 @@ class Binlog2sql(object):
                     if not self.stop_never:
                         try:
                             event_time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
+                            logger.debug(f"{event_time = }")
                         except OSError:
                             event_time = datetime.datetime(1980, 1, 1, 0, 0)
+                            logger.debug(f"ERROR {event_time = }")
                         if (stream.log_file == self.end_file and stream.log_pos == self.end_pos) or \
                                 (stream.log_file == self.eof_file and stream.log_pos == self.eof_pos):
                             flag_last_event = True
+                            logger.debug(f" for binlog_event in stream : {flag_last_event = }")
                         elif event_time < self.start_time:
                             if not (isinstance(binlog_event, RotateEvent)
                                     or isinstance(binlog_event, FormatDescriptionEvent)):
                                 last_pos = binlog_event.packet.log_pos
+                            logger.debug(f" for binlog_event in stream : {last_pos = }")
                             continue
                         elif (stream.log_file not in self.binlogList) or \
                                 (self.end_pos and stream.log_file == self.end_file and stream.log_pos > self.end_pos) or \
                                 (stream.log_file == self.eof_file and stream.log_pos > self.eof_pos) or \
                                 (event_time >= self.stop_time):
+                            logger.debug(f" for binlog_event in stream : break")
                             break
                         # else:
                         #     raise ValueError('unknown binlog file or position')
 
                     if isinstance(binlog_event, QueryEvent) and binlog_event.query == 'BEGIN':
                         e_start_pos = last_pos
+                        logger.debug(f" e_start_pos = last_pos : {e_start_pos = }")
 
                     if isinstance(binlog_event, QueryEvent) and not self.only_dml:
                         sql, log_pos_start, log_pos_end, log_shema, log_table, log_time = concat_sql_from_binlog_event(cursor=cursor,
@@ -275,6 +304,7 @@ class Binlog2sql(object):
                     elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                         for row in binlog_event.rows:
                             dv_count_sql_for_ch += 1
+                            logger.debug(f" {dv_count_sql_for_ch = }")
                             sql, log_pos_start, log_pos_end, log_shema, log_table, log_time, sql_type = concat_sql_from_binlog_event(cursor=cursor,
                                                                                                                                      binlog_event=binlog_event,
                                                                                                                                      no_pk=self.no_pk,
@@ -282,6 +312,7 @@ class Binlog2sql(object):
                                                                                                                                      flashback=self.flashback,
                                                                                                                                      e_start_pos=e_start_pos,
                                                                                                                                      for_clickhouse=self.for_clickhouse)
+                            logger.debug(f" {sql = }")
                             if self.for_clickhouse is True:
                                 pass
                             else:
@@ -374,7 +405,10 @@ class Binlog2sql(object):
                 #
                 # чистим старые логи
                 if settings.LEAVE_BINARY_LOGS_IN_DAYS > 0 and settings.LEAVE_BINARY_LOGS_IN_DAYS < 99:
-                    self.clear_binlog(log_time=log_time)
+                    try:
+                        self.clear_binlog(log_time=log_time)
+                    except Exception as ERROR:
+                        logger.error(f"self.clear_binlog(log_time=log_time): {ERROR = }")
         #
         except Exception as ERROR:
             f_status = 'ERROR'
@@ -387,10 +421,12 @@ class Binlog2sql(object):
             f_status = 'SUCCESS'
             f_text = f"{f_status} = Успешно обработано {dv_count_sql_for_ch} строк за {work_time_ms} мс. | max_log_time = {log_time}"
 
+
         return f_status, f_text
 
     def print_rollback_sql(self, filename):
         """print rollback sql from tmp_file"""
+        logger.debug(f"print_rollback_sql")
         with open(filename, mode="rb", encoding='utf-8') as f_tmp:
             batch_size = 1000
             i = 0
@@ -410,6 +446,7 @@ class Binlog2sql(object):
 
 
 def get_ch_param_for_next(connection_clickhouse_setting):
+    logger.debug(f"get_ch_param_for_next")
     log_id_max = -1
     log_time = '1980-01-01 00:00:00'
     log_file = ''
