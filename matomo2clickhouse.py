@@ -236,7 +236,6 @@ class Binlog2sql(object):
         dv_time_begin = time.time()
         dv_count_sql_for_ch = 0
         log_time = '1980-01-01 00:00:00'
-        logger.debug(f"process_binlog")
         logger.debug(f"{self.server_id = }")
         logger.debug(f"{self.start_file = }")
         logger.debug(f"{self.start_pos = }")
@@ -263,6 +262,8 @@ class Binlog2sql(object):
             tmp_file = create_unique_file('%s.%s' % (self.conn_mysql_setting['host'], self.conn_mysql_setting['port']))
             with temp_open(tmp_file, "w") as f_tmp, self.connection.cursor() as cursor:
                 for binlog_event in stream:
+                    logger.debug(f"***")
+                    logger.debug(f"for binlog_event in stream: {stream.log_file = }")
                     if not self.stop_never:
                         try:
                             event_time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
