@@ -1,10 +1,23 @@
 # -*- coding: utf-8 -*-
 # matomo2clickhouse
 # https://github.com/dneupokoev/matomo2clickhouse
-dv_file_version = '221206.03'
 #
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
+#
+dv_file_version = '230406.01'
+#
+# 230406.01:
+# + для ускорения изменил алгоритм: теперь запросы группируются, собираются в батчи и выполняются сразу партиями (обработка ускорилась примерно в 12 раз). Для тонкой настройки можно "поиграть" параметром settings.replication_batch_sql
+#
+# 230403.01:
+# + добавил параметр settings.EXECUTE_CLICKHOUSE (нужен для тестирования) - True: выполнять insert в ClickHouse (боевой режим); False: не выполнять insert (для тестирования и отладки)
+# + изменил параметр settings.CH_matomo_dbname - теперь базы в MySQL и ClickHouse могут иметь разные названия
+# + изменил проверку исключения для построчного выполнения (dv_find_text)
+#
+# 221206.03:
+# + базовая стабильная версия (полностью протестированная и отлаженная)
+#
 
 import settings
 import os
@@ -63,15 +76,36 @@ logger.info(f'{dv_path_main = }')
 logger.info(f'{dv_file_name = }')
 logger.info(f'{dv_file_version = }')
 logger.debug(f'{settings.DEBUG = }')
-logger.debug(f'{settings.PATH_TO_LIB = }')
-logger.debug(f'{settings.PATH_TO_LOG = }')
-logger.debug(f'{settings.replication_batch_size = }')
-logger.debug(f'{settings.replication_batch_sql = }')
-logger.debug(f'{settings.replication_max_number_files_per_session = }')
-logger.debug(f'{settings.replication_max_minutes = }')
-logger.debug(f'{settings.LEAVE_BINARY_LOGS_IN_DAYS = }')
+try:
+    logger.debug(f'{settings.EXECUTE_CLICKHOUSE = }')
+    dv_EXECUTE_CLICKHOUSE = settings.EXECUTE_CLICKHOUSE
+except:
+    logger.debug(f'settings.EXECUTE_CLICKHOUSE = None')
+    dv_EXECUTE_CLICKHOUSE = True
+logger.info(f'{dv_EXECUTE_CLICKHOUSE = }')
+logger.info(f'{settings.PATH_TO_LIB = }')
+logger.info(f'{settings.PATH_TO_LOG = }')
+logger.info(f'{settings.replication_batch_size = }')
+logger.info(f'{settings.replication_batch_sql = }')
+logger.info(f'{settings.replication_max_number_files_per_session = }')
+logger.info(f'{settings.replication_max_minutes = }')
+logger.info(f'{settings.LEAVE_BINARY_LOGS_IN_DAYS = }')
 #
-dv_find_text = re.compile(r'(\r|\n|\t|\b)')
+#
+# dv_find_text - переменная проверки исключения для построчного выполнения (dv_find_text)
+# \a 	Гудок встроенного в систему динамика.
+# \b 	Backspace, он же возврат, он же "пробел назад" – удаляет один символ перед курсором.
+# \f 	Разрыв страницы.
+# \n 	Перенос строки (новая строка).
+# \r 	Возврат курсора в начало строки.
+# \t 	Горизонтальный отступ слева от начала строки (горизонтальная табуляция).
+# \v 	Вертикальный отступ сверху (вертикальная табуляция).
+# \0 	Символ Null.
+#
+# так было до 230403:
+# dv_find_text = re.compile(r'(\r|\n|\t|\b)')
+# так стало с 230403:
+dv_find_text = re.compile(r'(\f|\n|\r|\t|\v|\0)')
 
 
 #
@@ -79,7 +113,7 @@ dv_find_text = re.compile(r'(\r|\n|\t|\b)')
 #
 def get_now():
     '''
-    вернет текущую дату и время в заданном формате
+    Функция возвращает текущую дату и время в заданном формате
     '''
     logger.debug(f"get_now")
     dv_time_begin = time.time()
@@ -90,7 +124,7 @@ def get_now():
 
 def get_second_between_now_and_datetime(in_datetime_str='2000-01-01 00:00:00'):
     '''
-    вернет количество секунд между текущим временем и полученной датой-временем в формате '%Y-%m-%d %H:%M:%S'
+    Функция возвращает количество секунд между текущим временем и полученной датой-временем в формате '%Y-%m-%d %H:%M:%S'
     '''
     logger.debug(f"get_second_between_now_and_datetime")
     tmp_datetime_start = datetime.datetime.strptime(in_datetime_str, '%Y-%m-%d %H:%M:%S')
@@ -101,7 +135,7 @@ def get_second_between_now_and_datetime(in_datetime_str='2000-01-01 00:00:00'):
 
 def get_disk_space():
     '''
-    вернет информацию о свободном месте на диске в гигабайтах
+    Функция возвращает информацию о свободном месте на диске в гигабайтах
     dv_statvfs_bavail = Количество свободных гагабайтов, которые разрешено использовать обычным пользователям (исключая зарезервированное пространство)
     dv_statvfs_blocks = Размер файловой системы в гигабайтах
     dv_result_bool = true - корректно отработало, false - получить данные не удалось
@@ -136,19 +170,19 @@ class Binlog2sql(object):
         """
         conn_mysql_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
         """
-
+        #
         if log_id is None:
             raise ValueError('no table "log_replication" in database ClickHouse or problems...')
         else:
             self.log_id = int(log_id)
-
+        #
         self.conn_clickhouse_setting = connection_clickhouse_setting
         # dv_ch_client = Client(**self.conn_clickhouse_setting)
         # result = dv_ch_client.execute("SHOW DATABASES")
         # print(f"{result = }")
-
+        #
         self.conn_mysql_setting = connection_mysql_setting
-
+        #
         if not start_file:
             self.connection = pymysql.connect(**self.conn_mysql_setting)
             with self.connection.cursor() as cursor:
@@ -158,7 +192,7 @@ class Binlog2sql(object):
             # raise ValueError('Lack of parameter: start_file')
         else:
             self.start_file = start_file
-
+        #
         self.start_pos = start_pos if start_pos else 4  # use binlog v4
         self.end_file = end_file
         self.end_pos = end_pos
@@ -170,7 +204,7 @@ class Binlog2sql(object):
             self.stop_time = datetime.datetime.strptime(stop_time, "%Y-%m-%d %H:%M:%S")
         else:
             self.stop_time = datetime.datetime.strptime('2999-12-31 00:00:00', "%Y-%m-%d %H:%M:%S")
-
+        #
         self.only_schemas = only_schemas if only_schemas else None
         self.only_tables = only_tables if only_tables else None
         self.no_pk, self.flashback, self.stop_never, self.back_interval = (no_pk, flashback, stop_never, back_interval)
@@ -178,7 +212,7 @@ class Binlog2sql(object):
         # print(f"{self.for_clickhouse = }")
         self.only_dml = only_dml
         self.sql_type = [t.upper() for t in sql_type] if sql_type else []
-
+        #
         self.binlogList = []
         self.connection = pymysql.connect(**self.conn_mysql_setting)
         with self.connection.cursor() as cursor:
@@ -188,7 +222,7 @@ class Binlog2sql(object):
                 self.end_pos = self.eof_pos
             if self.end_file == '':
                 self.end_file = self.eof_file
-
+            #
             cursor.execute("SHOW MASTER LOGS")
             bin_index = [row[0] for row in cursor.fetchall()]
             if self.start_file not in bin_index:
@@ -226,13 +260,43 @@ class Binlog2sql(object):
                 with self.connection.cursor() as cursor:
                     tmp_sql_execute = f"PURGE BINARY LOGS BEFORE DATE(NOW() - INTERVAL {settings.LEAVE_BINARY_LOGS_IN_DAYS} DAY) + INTERVAL 0 SECOND"
                     # print(f"{tmp_sql_execute = }")
-                    cursor.execute(tmp_sql_execute)
-                    logger.info(f"{tmp_sql_execute}")
+                    if dv_EXECUTE_CLICKHOUSE is True:
+                        cursor.execute(tmp_sql_execute)
+                        logger.info(f"{tmp_sql_execute}")
         except Exception as ERROR:
             logger.error(f"{ERROR = }")
 
+    def execute_in_clickhouse(self, dv_sql_4insert_dict={}):
+        '''
+        Функция обрабатывает полученный словарь, создает из него инсерты, выполняет на базе КликХауса, актуализирует и возвращает словарь
+        '''
+        dv_execute_time_begin = time.time()
+        dv_execute_count = sum(map(len, dv_sql_4insert_dict.values()))
+        dv_sql_4insert_dict = dict(dv_sql_4insert_dict)
+        logger.debug(f"execute_in_clickhouse - {sum(map(len, dv_sql_4insert_dict.values())) = }")
+        dv_sql_for_execute_last = ''
+        if len(dv_sql_4insert_dict) != 0:
+            # logger.debug(f"execute_in_clickhouse - {dv_sql_4insert_dict = }")
+            with Client(**self.conn_clickhouse_setting) as ch_cursor:
+                for dv_key, dv_value in dv_sql_4insert_dict.items():
+                    if dv_key != '':
+                        dv_sql_for_execute_all = dv_key
+                        dv_sql_for_execute_last = f"{dv_sql_for_execute_all}{dv_sql_4insert_dict[dv_key][0]}"
+                        for dv_value_i in range(0, len(dv_value)):
+                            dv_sql_for_execute_all = f"{dv_sql_for_execute_all}{dv_sql_4insert_dict[dv_key][dv_value_i]}"
+                        logger.debug(f"execute_in_clickhouse - {dv_sql_for_execute_all = }")
+                        # выполняем строку sql
+                        if dv_EXECUTE_CLICKHOUSE is True:
+                            ch_cursor.execute(dv_sql_for_execute_all)
+        logger.debug(f"execute_in_clickhouse - {dv_sql_for_execute_last = }")
+        dv_sql_4insert_dict = {}
+        dv_test_work_time_ms = int('{:.0f}'.format(1000 * (time.time() - dv_execute_time_begin)))
+        logger.info(f"execute_in_clickhouse: {dv_execute_count = } / {dv_test_work_time_ms = }")
+        return dv_sql_4insert_dict, dv_sql_for_execute_last
+
     def process_binlog(self):
         logger.debug(f"process_binlog")
+        dv_is_end_process_binlog = False
         dv_time_begin = time.time()
         dv_count_sql_for_ch = 0
         log_time = '1980-01-01 00:00:00'
@@ -249,8 +313,11 @@ class Binlog2sql(object):
                                         only_tables=self.only_tables, resume_stream=True, blocking=True,
                                         is_mariadb=False, freeze_schema=True)
             flag_last_event = False
-            dv_sql_for_execute_list = ''
+            # dv_sql_for_execute_list = ''
             dv_sql_for_execute_last = ''
+            dv_sql_log = ''
+            # Создаем пустой словарь для инсертов в clickhouse
+            dv_sql_4insert_dict = dict()
             logger.debug(f"{self.flashback = }")
             if self.flashback:
                 self.log_id = self.log_id - settings.replication_batch_size
@@ -295,24 +362,26 @@ class Binlog2sql(object):
                         logger.debug(f" e_start_pos = last_pos : {e_start_pos = }")
 
                     if isinstance(binlog_event, QueryEvent) and not self.only_dml:
-                        sql, log_pos_start, log_pos_end, log_shema, log_table, log_time = concat_sql_from_binlog_event(cursor=cursor,
-                                                                                                                       binlog_event=binlog_event,
-                                                                                                                       no_pk=self.no_pk,
-                                                                                                                       flashback=self.flashback,
-                                                                                                                       for_clickhouse=self.for_clickhouse)
+                        sql, log_pos_start, log_pos_end, log_shema, log_table, log_time, sql_type, sql_4insert_table, sql_4insert_values = concat_sql_from_binlog_event(
+                            cursor=cursor,
+                            binlog_event=binlog_event,
+                            no_pk=self.no_pk,
+                            flashback=self.flashback,
+                            for_clickhouse=self.for_clickhouse)
                         if sql:
                             print(sql)
                     elif is_dml_event(binlog_event) and event_type(binlog_event) in self.sql_type:
                         for row in binlog_event.rows:
                             dv_count_sql_for_ch += 1
                             logger.debug(f" {dv_count_sql_for_ch = }")
-                            sql, log_pos_start, log_pos_end, log_shema, log_table, log_time, sql_type = concat_sql_from_binlog_event(cursor=cursor,
-                                                                                                                                     binlog_event=binlog_event,
-                                                                                                                                     no_pk=self.no_pk,
-                                                                                                                                     row=row,
-                                                                                                                                     flashback=self.flashback,
-                                                                                                                                     e_start_pos=e_start_pos,
-                                                                                                                                     for_clickhouse=self.for_clickhouse)
+                            sql, log_pos_start, log_pos_end, log_shema, log_table, log_time, sql_type, sql_4insert_table, sql_4insert_values = concat_sql_from_binlog_event(
+                                cursor=cursor,
+                                binlog_event=binlog_event,
+                                no_pk=self.no_pk,
+                                row=row,
+                                flashback=self.flashback,
+                                e_start_pos=e_start_pos,
+                                for_clickhouse=self.for_clickhouse)
                             logger.debug(f" {sql = }")
                             if self.for_clickhouse is True:
                                 pass
@@ -334,69 +403,123 @@ class Binlog2sql(object):
                                 # f_tmp.write(sql + '\n')
                                 f_tmp.write(dv_sql_log + '\n')
                             else:
+                                logger.debug(f"execute sql to clickhouse | begin")
                                 self.log_id += 1
                                 dv_sql_log = "INSERT INTO `%s`.`log_replication` (`dateid`,`log_time`,`log_file`,`log_pos_start`,`log_pos_end`,`sql_type`)" \
                                              " VALUES (%s,'%s','%s',%s,%s,'%s');" \
                                              % (log_shema, get_dateid(), log_time, stream.log_file, int(log_pos_start), int(log_pos_end), sql_type)
                                 #
-                                logger.debug(f"execute sql to clickhouse | begin")
-                                if (settings.replication_batch_sql == 0) or (len(sql.splitlines()) > 1) or (dv_find_text.search(sql)):
+                                if (settings.replication_batch_sql == 0) or (
+                                        sql_type not in ('INSERT', 'INS-UPD')) or (
+                                        len(sql.splitlines()) > 1) or (
+                                        dv_find_text.search(sql) is not None):
                                     # сюда попадаем если в настройках указали обработку ПОСТРОЧНО
+                                    # или тип запроса не из списка ('INSERT', 'INS-UPD')
                                     # или в запросе есть перевод каретки (СТРОК в запросе > 1)
                                     # или в запросе есть управляющий символ
+                                    logger.info(f"LINE_BY_LINE: {(sql_type not in ('INSERT', 'INS-UPD')) = } | {(len(sql.splitlines()) > 1) = } | {(dv_find_text.search(sql) is not None) = }")
+                                    # #
+                                    # # до 230405 было так:
+                                    # if dv_sql_for_execute_list != '':
+                                    #     # если ранее уже собрали список запросов, то сначала надо обработать этот список (иначе могут образоваться пропуски данных)
+                                    #     logger.debug(f"dv_sql_for_execute_list != ''")
+                                    #     dv_sql_list_for_execute = dv_sql_for_execute_list.splitlines()
+                                    #     with Client(**self.conn_clickhouse_setting) as ch_cursor:
+                                    #         for dv_sql_line in range(len(dv_sql_list_for_execute)):
+                                    #             logger.debug(f"{dv_sql_list_for_execute[dv_sql_line] = }")
+                                    #             # зададим значение dv_sql_for_execute_last, чтобы в случае ошибки знать на каком именно запросе сломалось
+                                    #             dv_sql_for_execute_last = dv_sql_list_for_execute[dv_sql_line]
+                                    #             # выполняем строку sql
+                                    #             if dv_EXECUTE_CLICKHOUSE is True:
+                                    #                 ch_cursor.execute(dv_sql_list_for_execute[dv_sql_line])
+                                    #     dv_sql_for_execute_list = ''
+                                    # с 230405 стало так:
+                                    # ВНИМАНИЕ!!! обязательно сначала надо применить предыдущие sql чтобы апдейты и удаления корректно сработали
+                                    if len(dv_sql_4insert_dict) > 0:
+                                        # попадаем сюда если dv_sql_4insert_dict не пустой
+                                        logger.info(f"LINE_BY_LINE + BATCH | {len(dv_sql_4insert_dict) > 0 = }")
+                                        dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(dv_sql_4insert_dict=dv_sql_4insert_dict)
                                     #
-                                    if dv_sql_for_execute_list != '':
-                                        # если ранее уже собрали список запросов, то сначала надо обработать этот список (иначе могут образоваться пропуски данных)
-                                        dv_sql_list_for_execute = dv_sql_for_execute_list.splitlines()
-                                        with Client(**self.conn_clickhouse_setting) as ch_cursor:
-                                            for dv_sql_line in range(len(dv_sql_list_for_execute)):
-                                                logger.debug(f"{dv_sql_list_for_execute[dv_sql_line] = }")
-                                                # зададим значение dv_sql_for_execute_last, чтобы в случае ошибки знать на каком именно запросе сломалось
-                                                dv_sql_for_execute_last = dv_sql_list_for_execute[dv_sql_line]
-                                                # выполняем строку sql
-                                                ch_cursor.execute(dv_sql_list_for_execute[dv_sql_line])
-                                        dv_sql_for_execute_list = ''
                                     # далее обрабатываем текущую строку
                                     with Client(**self.conn_clickhouse_setting) as ch_cursor:
                                         dv_sql_for_execute_last = sql
-                                        logger.debug(f"{dv_sql_for_execute_last = }")
+                                        logger.info(f"{dv_sql_for_execute_last = }")
                                         # выполняем строку sql
-                                        ch_cursor.execute(dv_sql_for_execute_last)
-                                        dv_sql_for_execute_last = dv_sql_log
-                                        logger.debug(f"{dv_sql_for_execute_last = }")
-                                        # выполняем строку sql
-                                        ch_cursor.execute(dv_sql_for_execute_last)
+                                        if dv_EXECUTE_CLICKHOUSE is True:
+                                            ch_cursor.execute(dv_sql_for_execute_last)
+                                        #
+                                        if settings.replication_batch_sql == 0:
+                                            # если включена построчная запись, то будем писать лог для каждой строки
+                                            dv_sql_for_execute_last = dv_sql_log
+                                            dv_sql_log = ''
+                                            logger.info(f"{dv_sql_for_execute_last = }")
+                                            # выполняем строку sql
+                                            if dv_EXECUTE_CLICKHOUSE is True:
+                                                ch_cursor.execute(dv_sql_for_execute_last)
                                 else:
                                     # пополняем список запросов и если требуется, то будем его обрабатывать
-                                    dv_sql_for_execute_list = dv_sql_for_execute_list + sql + '\n' + dv_sql_log + '\n'
-                                    if (dv_sql_for_execute_list.count('\n') >= settings.replication_batch_sql) or \
-                                            (dv_count_sql_for_ch >= settings.replication_batch_size):
-                                        # попадаем сбда если в запрос собрали строк больше, чем replication_batch_sql
+                                    # добавляем элемент в ключ словаря, если ключа нет, то сначала создаем его
+                                    dv_sql_4insert_dict.setdefault(sql_4insert_table, []).append(sql_4insert_values)
+                                    # до 230405 было так:
+                                    # dv_sql_for_execute_list = dv_sql_for_execute_list + sql + '\n' + dv_sql_log + '\n'
+                                    # if (dv_sql_for_execute_list.count('\n') >= settings.replication_batch_sql) or \
+                                    #         (dv_count_sql_for_ch >= settings.replication_batch_size):
+                                    #     # попадаем сюда если в запрос собрали строк больше, чем replication_batch_sql
+                                    #     # или обработали уже больше replication_batch_size запросов
+                                    #     # (это нужно чтобы не слишком много съедать памяти)
+                                    #     dv_sql_list_for_execute = dv_sql_for_execute_list.splitlines()
+                                    #     with Client(**self.conn_clickhouse_setting) as ch_cursor:
+                                    #         for dv_sql_line in range(len(dv_sql_list_for_execute)):
+                                    #             logger.debug(f"{dv_sql_list_for_execute[dv_sql_line] = }")
+                                    #             # зададим значение dv_sql_for_execute_last, чтобы в случае ошибки знать на каком именно запросе сломалось
+                                    #             dv_sql_for_execute_last = dv_sql_list_for_execute[dv_sql_line]
+                                    #             # выполняем строку sql
+                                    #             if dv_EXECUTE_CLICKHOUSE is True:
+                                    #                 ch_cursor.execute(dv_sql_list_for_execute[dv_sql_line])
+                                    #     dv_sql_for_execute_list = ''
+                                    # с 230405 стало так:
+                                    dv_count_values_from_dv_sql_4insert_dict = sum(map(len, dv_sql_4insert_dict.values()))
+                                    if (dv_count_values_from_dv_sql_4insert_dict > settings.replication_batch_sql) or \
+                                            (dv_count_sql_for_ch > settings.replication_batch_size):
+                                        # попадаем сюда если в запрос собрали строк больше, чем replication_batch_sql
                                         # или обработали уже больше replication_batch_size запросов
                                         # (это нужно чтобы не слишком много съедать памяти)
-                                        dv_sql_list_for_execute = dv_sql_for_execute_list.splitlines()
-                                        with Client(**self.conn_clickhouse_setting) as ch_cursor:
-                                            for dv_sql_line in range(len(dv_sql_list_for_execute)):
-                                                logger.debug(f"{dv_sql_list_for_execute[dv_sql_line] = }")
-                                                # зададим значение dv_sql_for_execute_last, чтобы в случае ошибки знать на каком именно запросе сломалось
-                                                dv_sql_for_execute_last = dv_sql_list_for_execute[dv_sql_line]
-                                                # выполняем строку sql
-                                                ch_cursor.execute(dv_sql_list_for_execute[dv_sql_line])
-                                        dv_sql_for_execute_list = ''
+                                        logger.info(f"BATCH: {(dv_count_values_from_dv_sql_4insert_dict >= settings.replication_batch_sql) = } | {(dv_count_sql_for_ch >= settings.replication_batch_size) = }")
+                                        dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(dv_sql_4insert_dict=dv_sql_4insert_dict)
                                 logger.debug(f"execute sql to clickhouse | end")
                     #
-                    # если обработали заданное "максимальное количество запросов обрабатывать за один вызов", то прерываем цикл
-                    if dv_count_sql_for_ch >= settings.replication_batch_size:
-                        break
-                    #
-                    # если обрабатывали дольше отведенного времени, то прерываем цикл
                     dv_f_work_munutes = round(int('{:.0f}'.format(1000 * (time.time() - dv_time_begin))) / (1000 * 60))
-                    if dv_f_work_munutes >= settings.replication_max_minutes:
-                        break
-                    #
                     if not (isinstance(binlog_event, RotateEvent) or isinstance(binlog_event, FormatDescriptionEvent)):
                         last_pos = binlog_event.packet.log_pos
-                    if flag_last_event:
+                    #
+                    # если обработали заданное "максимальное количество запросов обрабатывать за один вызов", то прерываем цикл
+                    if dv_count_sql_for_ch > settings.replication_batch_size:
+                        dv_is_end_process_binlog = True
+                        # break
+                    # если обрабатывали дольше отведенного времени, то прерываем цикл
+                    elif dv_f_work_munutes >= settings.replication_max_minutes:
+                        dv_is_end_process_binlog = True
+                        # break
+                    elif flag_last_event:
+                        dv_is_end_process_binlog = True
+                        # break
+                    #
+                    if dv_is_end_process_binlog is True:
+                        if len(dv_sql_4insert_dict) > 0:
+                            # попадаем сюда если есть в словаре инсерты (теоретически сюда попадать не должны вообще, всё корректно должно отрабатывать при создании батчей)
+                            logger.info(f"BATCH: {(dv_is_end_process_binlog is True) = } | {len(dv_sql_4insert_dict) > 0 = }")
+                            dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(dv_sql_4insert_dict=dv_sql_4insert_dict)
+                        #
+                        if dv_sql_log != '':
+                            # если есть что записать в лог, то запишем
+                            with Client(**self.conn_clickhouse_setting) as ch_cursor:
+                                dv_sql_for_execute_last = dv_sql_log
+                                logger.info(f"SAVE_LOG: {(dv_sql_log != '') = }")
+                                logger.info(f"{dv_sql_for_execute_last = }")
+                                # выполняем строку sql
+                                if dv_EXECUTE_CLICKHOUSE is True:
+                                    ch_cursor.execute(dv_sql_for_execute_last)
+                        # завершаем:
                         break
                 #
                 stream.close()
@@ -421,7 +544,6 @@ class Binlog2sql(object):
             work_time_ms = f"{'{:.0f}'.format(1000 * (time.time() - dv_time_begin))}"
             f_status = 'SUCCESS'
             f_text = f"{f_status} = Успешно обработано {dv_count_sql_for_ch} строк за {work_time_ms} мс. | max_log_time = {log_time}"
-
 
         return f_status, f_text
 
