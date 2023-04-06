@@ -290,8 +290,8 @@ class Binlog2sql(object):
                             ch_cursor.execute(dv_sql_for_execute_all)
         logger.debug(f"execute_in_clickhouse - {dv_sql_for_execute_last = }")
         dv_sql_4insert_dict = {}
-        dv_test_work_time_ms = int('{:.0f}'.format(1000 * (time.time() - dv_execute_time_begin)))
-        logger.info(f"execute_in_clickhouse: {dv_execute_count = } / {dv_test_work_time_ms = }")
+        dv_execute_work_time_ms = int('{:.0f}'.format(1000 * (time.time() - dv_execute_time_begin)))
+        logger.info(f"execute_in_clickhouse: {dv_execute_count = } / {dv_execute_work_time_ms = }")
         return dv_sql_4insert_dict, dv_sql_for_execute_last
 
     def process_binlog(self):
