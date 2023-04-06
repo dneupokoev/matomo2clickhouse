@@ -271,7 +271,7 @@ class Binlog2sql(object):
         Функция обрабатывает полученный словарь, создает из него инсерты, выполняет на базе КликХауса, актуализирует и возвращает словарь
         '''
         dv_execute_time_begin = time.time()
-        dv_execute_count = sum(map(len, dv_sql_4insert_dict.values()))
+        dv_ch_execute_count = sum(map(len, dv_sql_4insert_dict.values()))
         dv_sql_4insert_dict = dict(dv_sql_4insert_dict)
         logger.debug(f"execute_in_clickhouse - {sum(map(len, dv_sql_4insert_dict.values())) = }")
         dv_sql_for_execute_last = ''
@@ -290,8 +290,8 @@ class Binlog2sql(object):
                             ch_cursor.execute(dv_sql_for_execute_all)
         logger.debug(f"execute_in_clickhouse - {dv_sql_for_execute_last = }")
         dv_sql_4insert_dict = {}
-        dv_execute_work_time_ms = int('{:.0f}'.format(1000 * (time.time() - dv_execute_time_begin)))
-        logger.info(f"execute_in_clickhouse: {dv_execute_count = } / {dv_execute_work_time_ms = }")
+        dv_ch_execute_work_time_ms = int('{:.0f}'.format(1000 * (time.time() - dv_execute_time_begin)))
+        logger.info(f"execute_in_clickhouse: {dv_ch_execute_count = } / {dv_ch_execute_work_time_ms = }")
         return dv_sql_4insert_dict, dv_sql_for_execute_last
 
     def process_binlog(self):
