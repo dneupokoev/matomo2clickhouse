@@ -5,9 +5,9 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-dv_file_version = '230504.02'
+dv_file_version = '230505.01'
 #
-# 230502.01:
+# 230505.01:
 # + исправил ошибку обработки одинарной кавычки в запросе: добавил перед кавычкой экранирование, чтобы sql-запрос отрабатывал корректно
 #
 # 230406.01:
@@ -35,6 +35,7 @@ import json
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
 from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, create_unique_file, temp_open, reversed_lines, is_dml_event, event_type, get_dateid
+from binlog2sql_util import binlog2sql_util_version
 from clickhouse_driver import Client
 #
 #
@@ -76,19 +77,20 @@ try:
 except Exception as error:
     # Не удалось получить версию питона
     logger.error(f'ERROR - python.version: {error = }')
+logger.info(f'{dv_file_version = }')
+logger.info(f'{binlog2sql_util_version = }')
 logger.info(f'{dv_path_main = }')
 logger.info(f'{dv_file_name = }')
-logger.info(f'{dv_file_version = }')
-logger.debug(f'{settings.DEBUG = }')
-try:
-    logger.debug(f'{settings.EXECUTE_CLICKHOUSE = }')
-    dv_EXECUTE_CLICKHOUSE = settings.EXECUTE_CLICKHOUSE
-except:
-    logger.debug(f'settings.EXECUTE_CLICKHOUSE = None')
-    dv_EXECUTE_CLICKHOUSE = True
-logger.info(f'{dv_EXECUTE_CLICKHOUSE = }')
 logger.info(f'{settings.PATH_TO_LIB = }')
 logger.info(f'{settings.PATH_TO_LOG = }')
+logger.info(f'{settings.DEBUG = }')
+try:
+    logger.info(f'{settings.EXECUTE_CLICKHOUSE = }')
+    dv_EXECUTE_CLICKHOUSE = settings.EXECUTE_CLICKHOUSE
+except:
+    logger.info(f'settings.EXECUTE_CLICKHOUSE = None')
+    dv_EXECUTE_CLICKHOUSE = True
+logger.info(f'{dv_EXECUTE_CLICKHOUSE = }')
 logger.info(f'{settings.replication_batch_size = }')
 logger.info(f'{settings.replication_batch_sql = }')
 logger.info(f'{settings.replication_max_number_files_per_session = }')
