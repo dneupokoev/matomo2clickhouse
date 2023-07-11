@@ -5,7 +5,10 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-binlog2sql_util_version = '230510.01'
+binlog2sql_util_version = '230711.01'
+#
+# 230711.01:
+# + отключил асинхронность мутаций (update и delete теперь будут ждать завершения мутаций на данном сервере)
 #
 # 230510.01:
 # + отключил get_correct_sql
@@ -303,7 +306,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, f
         if isinstance(binlog_event, WriteRowsEvent):
             sql_type = 'DELETE'
             if for_clickhouse is True:
-                template = 'ALTER TABLE `{0}`.`{1}` DELETE WHERE {2};'.format(
+                template = 'ALTER TABLE `{0}`.`{1}` DELETE WHERE {2} SETTINGS mutations_sync = 1;'.format(
                     get_schema_clickhouse(binlog_event.schema), binlog_event.table,
                     ' AND '.join(map(compare_items, row['values'].items()))
                 )
@@ -331,7 +334,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, f
         elif isinstance(binlog_event, UpdateRowsEvent):
             sql_type = 'UPDATE'
             if for_clickhouse is True:
-                template = 'ALTER TABLE `{0}`.`{1}` UPDATE {2} WHERE {3};'.format(
+                template = 'ALTER TABLE `{0}`.`{1}` UPDATE {2} WHERE {3} SETTINGS mutations_sync = 1;'.format(
                     get_schema_clickhouse(binlog_event.schema), binlog_event.table,
                     ', '.join(['`%s`=%%s' % x for x in row['before_values'].keys()]),
                     ' AND '.join(map(compare_items, row['after_values'].items())))
@@ -379,7 +382,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, f
         elif isinstance(binlog_event, DeleteRowsEvent):
             sql_type = 'DELETE'
             if for_clickhouse is True:
-                template = 'ALTER TABLE `{0}`.`{1}` DELETE WHERE {2};'.format(
+                template = 'ALTER TABLE `{0}`.`{1}` DELETE WHERE {2} SETTINGS mutations_sync = 1;'.format(
                     get_schema_clickhouse(binlog_event.schema), binlog_event.table, ' AND '.join(map(compare_items, row['values'].items())))
             else:
                 template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
@@ -416,7 +419,7 @@ def generate_sql_pattern(binlog_event, row=None, flashback=False, no_pk=False, f
                         if row['after_values'][dv_key_name] == row['before_values'][dv_key_name]:
                             del row['after_values'][dv_key_name]
                             pass
-                    template = 'ALTER TABLE `{0}`.`{1}` UPDATE {2} WHERE {3};'.format(
+                    template = 'ALTER TABLE `{0}`.`{1}` UPDATE {2} WHERE {3} SETTINGS mutations_sync = 1;'.format(
                         get_schema_clickhouse(binlog_event.schema), binlog_event.table,
                         ', '.join(['`%s`=%%s' % k for k in row['after_values'].keys()]),
                         ' AND '.join(['`%s`=%%s' % k for k in row['before_values'].keys()])

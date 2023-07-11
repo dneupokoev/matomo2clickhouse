@@ -5,7 +5,7 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-dv_file_version = '230505.02'
+dv_file_version = '230711.01'
 #
 # 230505.02:
 # + исправил ошибку обработки одинарной кавычки в запросе: добавил перед кавычкой экранирование, чтобы sql-запрос отрабатывал корректно
@@ -746,11 +746,15 @@ if __name__ == '__main__':
                     dv_for_send_text = f"{dv_for_send_text} | check_disk_space = ERROR"
         except:
             pass
-        logger.info(f"{dv_for_send_text}")
+        #
+        if dv_for_send_txt_type == 'ERROR':
+            logger.error(f"{dv_for_send_text}")
+        else:
+            logger.info(f"{dv_for_send_text}")
         try:
             if settings.SEND_TELEGRAM is True:
                 if dv_for_send_txt_type == 'ERROR':
-                    # если отработало с ошибкой, то в телеграм оправляем ошибку ВСЕГДА! хоть каждую минуту - это ен спам
+                    # если отработало с ошибкой, то в телеграм оправляем ошибку ВСЕГДА! хоть каждую минуту - это не спам
                     dv_is_SEND_TELEGRAM_success = True
                 else:
                     dv_is_SEND_TELEGRAM_success = False
@@ -774,6 +778,7 @@ if __name__ == '__main__':
                                                      txt_type=dv_for_send_txt_type,
                                                      txt_to_send=f"{dv_for_send_text}",
                                                      txt_mode=None)
+                    logger.info(f"send to telegram: {dv_for_send_text}")
         except:
             pass
         try:
