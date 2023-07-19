@@ -5,7 +5,10 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-dv_file_version = '230711.01'
+dv_file_version = '230719.01'
+# 230719.01:
+# + отключил асинхронность мутаций (update и delete теперь будут ждать завершения мутаций на данном сервере), чтобы не отваливалось из-за большого числа delete
+# + исправил глюк с инсертом и апдейтом одной записи, когда они идут подряд (с очень маленьким интервалом) и пишутся в таблицы из settings.tables_not_updated
 #
 # 230505.02:
 # + исправил ошибку обработки одинарной кавычки в запросе: добавил перед кавычкой экранирование, чтобы sql-запрос отрабатывал корректно
@@ -110,9 +113,6 @@ logger.info(f'{settings.LEAVE_BINARY_LOGS_IN_DAYS = }')
 # \v 	Вертикальный отступ сверху (вертикальная табуляция).
 # \0 	Символ Null.
 #
-# так было до 230403:
-# dv_find_text = re.compile(r'(\r|\n|\t|\b)')
-# так стало с 230403:
 dv_find_text = re.compile(r'(\f|\n|\r|\t|\v|\0)')
 
 
@@ -445,22 +445,6 @@ class Binlog2sql(object):
                                     # или в запросе есть перевод каретки (СТРОК в запросе > 1)
                                     # или в запросе есть управляющий символ
                                     logger.info(f"LINE_BY_LINE: {(sql_type not in ('INSERT', 'INS-UPD')) = } | {(len(sql.splitlines()) > 1) = } | {(dv_find_text.search(sql) is not None) = }")
-                                    # #
-                                    # # до 230405 было так:
-                                    # if dv_sql_for_execute_list != '':
-                                    #     # если ранее уже собрали список запросов, то сначала надо обработать этот список (иначе могут образоваться пропуски данных)
-                                    #     logger.debug(f"dv_sql_for_execute_list != ''")
-                                    #     dv_sql_list_for_execute = dv_sql_for_execute_list.splitlines()
-                                    #     with Client(**self.conn_clickhouse_setting) as ch_cursor:
-                                    #         for dv_sql_line in range(len(dv_sql_list_for_execute)):
-                                    #             logger.debug(f"{dv_sql_list_for_execute[dv_sql_line] = }")
-                                    #             # зададим значение dv_sql_for_execute_last, чтобы в случае ошибки знать на каком именно запросе сломалось
-                                    #             dv_sql_for_execute_last = dv_sql_list_for_execute[dv_sql_line]
-                                    #             # выполняем строку sql
-                                    #             if dv_EXECUTE_CLICKHOUSE is True:
-                                    #                 ch_cursor.execute(dv_sql_list_for_execute[dv_sql_line])
-                                    #     dv_sql_for_execute_list = ''
-                                    # с 230405 стало так:
                                     # ВНИМАНИЕ!!! обязательно сначала надо применить предыдущие sql чтобы апдейты и удаления корректно сработали
                                     if len(dv_sql_4insert_dict) > 0:
                                         # попадаем сюда если dv_sql_4insert_dict не пустой
@@ -487,24 +471,6 @@ class Binlog2sql(object):
                                     # пополняем список запросов и если требуется, то будем его обрабатывать
                                     # добавляем элемент в ключ словаря, если ключа нет, то сначала создаем его
                                     dv_sql_4insert_dict.setdefault(sql_4insert_table, []).append(sql_4insert_values)
-                                    # до 230405 было так:
-                                    # dv_sql_for_execute_list = dv_sql_for_execute_list + sql + '\n' + dv_sql_log + '\n'
-                                    # if (dv_sql_for_execute_list.count('\n') >= dv_replication_batch_sql) or \
-                                    #         (dv_count_sql_for_ch >= settings.replication_batch_size):
-                                    #     # попадаем сюда если в запрос собрали строк больше, чем replication_batch_sql
-                                    #     # или обработали уже больше replication_batch_size запросов
-                                    #     # (это нужно чтобы не слишком много съедать памяти)
-                                    #     dv_sql_list_for_execute = dv_sql_for_execute_list.splitlines()
-                                    #     with Client(**self.conn_clickhouse_setting) as ch_cursor:
-                                    #         for dv_sql_line in range(len(dv_sql_list_for_execute)):
-                                    #             logger.debug(f"{dv_sql_list_for_execute[dv_sql_line] = }")
-                                    #             # зададим значение dv_sql_for_execute_last, чтобы в случае ошибки знать на каком именно запросе сломалось
-                                    #             dv_sql_for_execute_last = dv_sql_list_for_execute[dv_sql_line]
-                                    #             # выполняем строку sql
-                                    #             if dv_EXECUTE_CLICKHOUSE is True:
-                                    #                 ch_cursor.execute(dv_sql_list_for_execute[dv_sql_line])
-                                    #     dv_sql_for_execute_list = ''
-                                    # с 230405 стало так:
                                     dv_count_values_from_dv_sql_4insert_dict = sum(map(len, dv_sql_4insert_dict.values()))
                                     if (dv_count_values_from_dv_sql_4insert_dict > dv_replication_batch_sql) or \
                                             (dv_count_sql_for_ch > settings.replication_batch_size):

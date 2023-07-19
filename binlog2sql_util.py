@@ -5,13 +5,11 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-binlog2sql_util_version = '230711.01'
+binlog2sql_util_version = '230719.01'
 #
-# 230711.01:
-# + отключил асинхронность мутаций (update и delete теперь будут ждать завершения мутаций на данном сервере)
-#
-# 230510.01:
-# + отключил get_correct_sql
+# 230719.01:
+# + отключил асинхронность мутаций (update и delete теперь будут ждать завершения мутаций на данном сервере), чтобы не отваливалось из-за большого числа delete
+# + исправил глюк с инсертом и апдейтом одной записи, когда они идут подряд (с очень маленьким интервалом) и пишутся в таблицы из settings.tables_not_updated
 #
 # 230404.01:
 # + добавил поля sql_4insert_table и sql_4insert_values - для объединения инсертов в один большой
@@ -27,8 +25,6 @@ binlog2sql_util_version = '230711.01'
 import settings
 import os
 import sys
-import re
-import copy
 import argparse
 import datetime
 import time
@@ -54,20 +50,6 @@ def get_schema_clickhouse(in_schema=''):
         out_schema = in_schema
     return out_schema
 
-
-def get_correct_sql(sql=''):
-    # # sql = sql.replace('=NULL', ' is NULL')
-    # #
-    # sql = re.sub(r", '([-]{0,1}[0-9]{1,16}[.][0-9]{1,16}[e]{0,8}[0-9])'", r", \1", sql)
-    # sql = re.sub(r", ([-]{0,1}[0-9]{1,16}[.][0-9]{1,16}[e]{0,8}[0-9])", r", '\1'", sql)
-    # #
-    # sql = re.sub(r"`='([-]{0,1}[0-9]{1,16}[.][0-9]{1,16}[e]{0,8}[0-9])'", r"`=\1", sql)
-    # sql = re.sub(r"`=([-]{0,1}[0-9]{1,16}[.][0-9]{1,16}[e]{0,8}[0-9])", r"`='\1'", sql)
-    # #
-    # sql = re.sub(r"`='([-]{0,1}[0-9]{1,16}[.][0-9]{1,16}[e]{0,8}[0-9])' AND", r"`=\1 AND", sql)
-    # sql = re.sub(r"`=([-]{0,1}[0-9]{1,16}[.][0-9]{1,16}[e]{0,8}[0-9]) AND", r"`='\1' AND", sql)
-    # #
-    return sql
 
 
 def get_dateid():
@@ -264,17 +246,11 @@ def concat_sql_from_binlog_event(cursor, binlog_event, row=None, e_start_pos=Non
         # print(f"{pattern['template'] = }")
         # print(f"{pattern['values'] = }")
         sql_type = pattern['sql_type']
-        if sql_type in ('INSERT', 'IN-UPD'):
+        if sql_type in ('INSERT', 'INS-UPD'):
             sql_4insert_table = pattern['sql_4insert_table']
             # print(f"{sql_4insert_table = }")
             sql_4insert_values = cursor.mogrify(pattern['sql_4insert_values'], pattern['values'])
-            # print(f"BEFORE: {sql_4insert_values = }")
-            sql_4insert_values = get_correct_sql(sql_4insert_values)
-            # print(f"AFTER: {sql_4insert_values = }")
         sql = cursor.mogrify(pattern['template'], pattern['values'])
-        # print(f"{sql = }")
-        sql = get_correct_sql(sql)
-        # print(f"{sql = }")
         #
         time = datetime.datetime.fromtimestamp(binlog_event.timestamp)
         if for_clickhouse is True:
