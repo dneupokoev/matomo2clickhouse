@@ -163,13 +163,23 @@ cp utf_8.py utf8mb3.py
 - При ошибке ```'utf-8' codec can't decode bytes in position 790-791: unexpected end of data```
   помогло добавление параметра ```errors="ignore"```
   в ```.venv/lib/python3.10/site-packages/pymysqlreplication/events.py```
-  строка 203 в параметр ```.decode("utf-8", errors="ignore")```:
-  ```self.query = self.packet.read(event_size - 13 - self.status_vars_length - self.schema_length - 1).decode("utf-8", errors="ignore")```
+  строка 203 в параметр
+```
+.decode("utf-8", errors="ignore"): self.query = self.packet.read(event_size - 13 - self.status_vars_length - self.schema_length - 1).decode("utf-8", errors="ignore")
+```
+
+- Ошибка "DB::Exception: Too many parts (600). Merges are processing significantly slower than inserts".
+Описание как бороться здесь: [clickhouse.com/docs/knowledgebase/exception-too-many-parts](https://clickhouse.com/docs/knowledgebase/exception-too-many-parts)
+Если кратко, то: главное требование при вставке в ClickHouse: никогда не отправлять слишком много запросов в секунду.
+В идеале - одна вставка в секунду/в несколько секунд, с UPDATE и DELETE нужно быть еще аккуратнее, а в идеале вообще избегать их.
+Как избежать UPDATE описано в [settings.tables_not_updated](#tables_not_updated)
+
+
 
 ### ВНИМАНИЕ!
 
-- В переменной ```settings.tables_not_updated``` указаны таблицы, для которых все UPDATE заменены на INSERT, т.е. записи добавляются, а не изменяются. Это
-  необходимо учитывать при селектах! Актуальные записи - те, у которых максимальное значение ```dateid```.
+- В переменной <span id="tables_not_updated">```settings.tables_not_updated```<span> указаны таблицы, для которых все UPDATE заменены на INSERT, т.е. записи добавляются, а не изменяются.
+  Это необходимо учитывать при селектах! Актуальные записи - те, у которых максимальное значение ```dateid```.
   Сделано это для того, чтобы ClickHouse работал корректно (он не заточен на UPDATE - это ОЧЕНЬ медленная операция). Для примера (как получать актуальные
   данные) созданы 2 представления: ```view_matomo_log_visit``` и```view_matomo_log_link_visit_action```
 - Перед обновлением matomo НЕОБХОДИМО (!!!) изучить что меняется. В случае, если меняется структура базы данных, то нужно проработать план обновления (перед
