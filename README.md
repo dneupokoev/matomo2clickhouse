@@ -172,7 +172,7 @@ cp utf_8.py utf8mb3.py
 Описание как бороться здесь: [clickhouse.com/docs/knowledgebase/exception-too-many-parts](https://clickhouse.com/docs/knowledgebase/exception-too-many-parts)
 Если кратко, то: главное требование при вставке в ClickHouse: никогда не отправлять слишком много запросов в секунду.
 В идеале - одна вставка в секунду/в несколько секунд, с UPDATE и DELETE нужно быть еще аккуратнее, а в идеале вообще избегать их.
-Как избежать UPDATE описано в [settings.tables_not_updated](#tables_not_updated)
+Один из вариантов, как избежать UPDATE описан в [settings.tables_not_updated](#tables_not_updated)
 
 
 
