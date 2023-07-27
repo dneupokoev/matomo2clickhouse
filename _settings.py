@@ -5,6 +5,9 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
+# 230727.01
+# + добавил settings.sql_execute_at_end_matomo2clickhouse: скрипты, которые выполнятся в конце работы matomo2clickhouse (можно использовать для удаления дублей или для других задач)
+#
 # 230403:
 # + добавил параметр settings.EXECUTE_CLICKHOUSE (нужен для тестирования) - True: выполнять insert в ClickHouse (боевой режим); False: не выполнять insert (для тестирования и отладки)
 # + изменил параметр CH_matomo_dbname - теперь базы в MySQL и ClickHouse могут иметь разные названия
@@ -106,12 +109,76 @@ replication_tables = [
 ]
 #
 # таблицы, в которые все update будем менять на insert
-# ВНИМАНИЕ! в тих таблицах в кликхаусе должно быть поле dateid UInt64
+# ВНИМАНИЕ! в этих таблицах в кликхаусе должно быть поле dateid UInt64
 # чтобы потом корректно с этим работать нужно брать самую свежую запись (максимальное значение поля dateid)
 tables_not_updated = [
     'matomo_log_visit',
     'matomo_log_link_visit_action',
 ]
+#
+# Удаление старых дубликатов
+# Если tables_not_updated заполнено, то в указанных таблицах будут копиться старые устаревшие данные.
+# Эти данные можно отсекать на уровне запросов (например, при подготовке витрин данных), а можно удалять.
+# Для удаления нужно заполнить список tables_clear_old_duplicates запросами, которые выполнятся в конце работы matomo2clickhouse:
+sql_execute_at_end_matomo2clickhouse = [
+    '''
+    -- делает выборку dateid, которые нужно удалить, отправляет на удаление и ждет окончания мутации
+    ALTER TABLE {CH_matomo_dbname}.matomo_log_link_visit_action DELETE
+    WHERE 1=1
+    AND server_time >= (DATE_sub(NOW(), INTERVAL {dv_days_ago_start} DAY))
+    AND server_time <= (DATE_sub(NOW(), INTERVAL {dv_days_ago_finish} DAY))
+    AND dateid in (
+        SELECT t2.dateid_for_del
+        FROM (
+            SELECT idlink_va, dateid AS dateid_for_del
+            FROM {CH_matomo_dbname}.matomo_log_link_visit_action
+            WHERE 1=1
+            AND server_time >= (DATE_sub(NOW(), INTERVAL {dv_days_ago_start} DAY))
+            AND server_time <= (DATE_sub(NOW(), INTERVAL {dv_days_ago_finish} DAY))
+        ) t2
+        RIGHT JOIN (
+            SELECT idlink_va, max(dateid) AS dateid_max, count(*) AS id_count
+            FROM {CH_matomo_dbname}.matomo_log_link_visit_action
+            WHERE 1=1
+            AND server_time >= (DATE_sub(NOW(), INTERVAL {dv_days_ago_start} DAY))
+            AND server_time <= (DATE_sub(NOW(), INTERVAL {dv_days_ago_finish} DAY))
+            GROUP BY idlink_va
+            HAVING id_count > 1
+        ) t1 ON t2.idlink_va = t1.idlink_va
+        WHERE t2.dateid_for_del <> t1.dateid_max
+    )
+    SETTINGS mutations_sync = 1;
+    '''.format(CH_matomo_dbname=CH_matomo_dbname, dv_days_ago_start=14, dv_days_ago_finish=0),
+    '''
+    -- делает выборку dateid, которые нужно удалить, отправляет на удаление и ждет окончания мутации
+    ALTER TABLE {CH_matomo_dbname}.matomo_log_visit DELETE
+    WHERE 1=1
+    AND visit_first_action_time >= (DATE_sub(NOW(), INTERVAL {dv_days_ago_start} DAY))
+    AND visit_first_action_time <= (DATE_sub(NOW(), INTERVAL {dv_days_ago_finish} DAY))
+    AND dateid in (
+        SELECT t2.dateid_for_del
+        FROM (
+            SELECT idvisit, dateid AS dateid_for_del
+            FROM {CH_matomo_dbname}.matomo_log_visit
+            WHERE 1=1
+            AND visit_first_action_time >= (DATE_sub(NOW(), INTERVAL {dv_days_ago_start} DAY))
+            AND visit_first_action_time <= (DATE_sub(NOW(), INTERVAL {dv_days_ago_finish} DAY))
+        ) t2
+        RIGHT JOIN (
+            SELECT idvisit, max(dateid) AS dateid_max, count(*) AS id_count
+            FROM {CH_matomo_dbname}.matomo_log_visit
+            WHERE 1=1
+            AND visit_first_action_time >= (DATE_sub(NOW(), INTERVAL {dv_days_ago_start} DAY))
+            AND visit_first_action_time <= (DATE_sub(NOW(), INTERVAL {dv_days_ago_finish} DAY))
+            GROUP BY idvisit
+            HAVING id_count > 1
+        ) t1 ON t2.idvisit = t1.idvisit
+        WHERE t2.dateid_for_del <> t1.dateid_max
+    )
+    SETTINGS mutations_sync = 1;
+    '''.format(CH_matomo_dbname=CH_matomo_dbname, dv_days_ago_start=14, dv_days_ago_finish=0),
+]
+#
 #
 #
 # True - Проверять свободное место на диске, False - не проверять

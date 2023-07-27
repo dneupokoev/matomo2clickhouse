@@ -5,7 +5,10 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-dv_file_version = '230719.01'
+dv_file_version = '230727.01'
+# 230727.01
+# + добавил settings.sql_execute_at_end_matomo2clickhouse: скрипты, которые выполнятся в конце работы matomo2clickhouse (можно использовать для удаления дублей или для других задач)
+#
 # 230719.01:
 # + отключил асинхронность мутаций (update и delete теперь будут ждать завершения мутаций на данном сервере), чтобы не отваливалось из-за большого числа delete
 # + исправил глюк с инсертом и апдейтом одной записи, когда они идут подряд (с очень маленьким интервалом) и пишутся в таблицы из settings.tables_not_updated
@@ -100,7 +103,18 @@ logger.info(f'{settings.replication_batch_size = }')
 logger.info(f'{settings.replication_batch_sql = }')
 logger.info(f'{settings.replication_max_number_files_per_session = }')
 logger.info(f'{settings.replication_max_minutes = }')
+try:
+    settings_replication_max_minutes = int(settings.replication_max_minutes)
+    if settings_replication_max_minutes > 10:
+        settings_replication_max_minutes = settings_replication_max_minutes - 3
+except:
+    settings_replication_max_minutes = 5
+logger.info(f'{settings_replication_max_minutes = }')
+#
 logger.info(f'{settings.LEAVE_BINARY_LOGS_IN_DAYS = }')
+logger.info(f'{settings.replication_tables = }')
+logger.info(f'{settings.tables_not_updated = }')
+logger.info(f'{settings.sql_execute_at_end_matomo2clickhouse = }')
 #
 #
 # dv_find_text - переменная проверки исключения для построчного выполнения (dv_find_text)
@@ -490,7 +504,7 @@ class Binlog2sql(object):
                         dv_is_end_process_binlog = True
                         # break
                     # если обрабатывали дольше отведенного времени, то прерываем цикл
-                    elif dv_f_work_munutes >= settings.replication_max_minutes:
+                    elif dv_f_work_munutes >= settings_replication_max_minutes:
                         dv_is_end_process_binlog = True
                         # break
                     elif flag_last_event:
@@ -535,9 +549,31 @@ class Binlog2sql(object):
                 f_text = f"{ERROR}"
         else:
             work_time_ms = f"{'{:.0f}'.format(1000 * (time.time() - dv_time_begin))}"
-            f_status = 'SUCCESS'
-            f_text = f"{f_status} = Успешно обработано {dv_count_sql_for_ch} строк за {work_time_ms} мс. | max_log_time = {log_time}"
-
+            f_text = f" = Успешно обработано {dv_count_sql_for_ch} строк за {work_time_ms} мс. | max_log_time = {log_time}"
+            f_status = 'ERROR'
+            try:
+                # Здесь решаем нужно ли выполнять скрипты из settings.sql_execute_at_end_matomo2clickhouse
+                if (settings_replication_max_minutes > 10) and (len(settings.sql_execute_at_end_matomo2clickhouse) > 0):
+                    for dv_value_i in range(0, len(settings.sql_execute_at_end_matomo2clickhouse)):
+                        dv_sql_for_execute_last = f"{settings.sql_execute_at_end_matomo2clickhouse[dv_value_i]}"
+                        # если есть что выполнить, то выполняем
+                        if dv_sql_for_execute_last != '':
+                            with Client(**self.conn_clickhouse_setting) as ch_cursor:
+                                logger.info(f"settings.sql_execute_at_end_matomo2clickhouse_{dv_value_i}: {dv_sql_for_execute_last = }")
+                                # выполняем строку sql
+                                if dv_EXECUTE_CLICKHOUSE is True:
+                                    ch_cursor.execute(dv_sql_for_execute_last)
+                                    pass
+                    work_time_ms = int(f"{'{:.0f}'.format(1000 * (time.time() - dv_time_begin))}") - int(work_time_ms)
+                    f_text = f"{f_text} | Время работы скрипта end = {work_time_ms} мс."
+                    pass
+                f_status = 'SUCCESS'
+                f_text = f"{f_status}{f_text}"
+            except Exception as ERROR:
+                if dv_sql_for_execute_last != '':
+                    f_text = f"'ERROR = LAST_SQL:\n\n{dv_sql_for_execute_last}\n\n{ERROR = }"
+                else:
+                    f_text = f"{ERROR}"
         return f_status, f_text
 
     def print_rollback_sql(self, filename):
@@ -630,7 +666,7 @@ if __name__ == '__main__':
             dv_file_old_start = datetime.datetime.strptime(dv_file_lib_time, '%Y-%m-%d %H:%M:%S')
             tmp_now = datetime.datetime.strptime(datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'), '%Y-%m-%d %H:%M:%S')
             tmp_seconds = int((tmp_now - dv_file_old_start).total_seconds())
-            if tmp_seconds < settings.replication_max_minutes * 2 * 60:
+            if tmp_seconds < settings_replication_max_minutes * 2 * 60:
                 raise Exception(f"Уже выполняется c {dv_file_lib_time} - перед запуском дождитесь завершения предыдущего процесса!")
         else:
             dv_file_lib_open = open(dv_file_lib_path, mode="w", encoding='utf-8')
