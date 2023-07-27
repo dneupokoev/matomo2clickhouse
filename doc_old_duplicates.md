@@ -90,7 +90,8 @@ In case of unretryable error, mutation can be killed with KILL MUTATION query. (
 ```
 SELECT * FROM system.mutations WHERE is_done = 0
 ```
-Убить мутацию можно примерно так (**ВНИМАНИЕ! ОПАСНО!** изучите инcтрукцию к ClickHouse + убивается не мгновенно, некоторое время еще будет висеть):
+Убивать мутации нет необходимости - они сами исчезнут со временем.
+Но если очень хочется пощекотать нервы, то убить мутацию можно примерно так (**ВНИМАНИЕ! ОПАСНО!** изучите инcтрукцию к ClickHouse + убивается не мгновенно, некоторое время еще будет висеть):
 ```
 KILL MUTATION WHERE database = 'matomo' AND table = 'matomo_log_link_visit_action' AND mutation_id = 'mutation_48523052.txt'
 ```
