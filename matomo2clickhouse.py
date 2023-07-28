@@ -63,12 +63,14 @@ from loguru import logger
 # logger.add("log/" + dv_file_name + ".json", level="DEBUG", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8", serialize=True)
 # logger.add("log/" + dv_file_name + ".json", level="WARNING", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8", serialize=True)
 # logger.add("log/" + dv_file_name + ".json", level="INFO", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8", serialize=True)
+# logger.add(settings.PATH_TO_LOG + dv_file_name + ".log", level="INFO", rotation="0.5 GB", retention='30 days', compression="gz", encoding="utf-8")
 logger.remove()  # отключаем логирование в консоль
 if settings.DEBUG is True:
     logger.add(settings.PATH_TO_LOG + dv_file_name + ".log", level="DEBUG", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8")
     logger.add(sys.stderr, level="DEBUG")
 else:
     logger.add(settings.PATH_TO_LOG + dv_file_name + ".log", level="INFO", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8")
+    # logger.add(settings.PATH_TO_LOG + dv_file_name + ".log", level="INFO", rotation="10 MB", retention='30 days', compression="gz", encoding="utf-8")
     logger.add(sys.stderr, level="INFO")
 logger.enable(dv_file_name)  # даем имя логированию
 logger.info(f'***')
