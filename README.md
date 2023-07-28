@@ -140,33 +140,39 @@ crontab -e
 
 - При выполнении скрипта появилась ошибка, что ClickHouse не может загрузить данные.
 Нужно в файле ```settings.py``` заменить (запомните как настроено, когда почините, нужно будет вернуть) значения параметров так:
-```
-DEBUG = True
-replication_batch_sql = 0
-```
-Запустить скрипт вручную. В самой последней строке, содержащей переменную ```dv_sql_for_execute_last``` будет тело "проблемного" запроса. Необходимо разобраться что с ним не так и принять меры. Обязательно изучите все комментарии в ```settings.py``` 
+  ```
+  DEBUG = True
+  replication_batch_sql = 0
+  ```
+  Далее запустить скрипт вручную. В самой последней строке, содержащей переменную ```dv_sql_for_execute_last``` будет тело "проблемного" запроса. Необходимо разобраться что с ним не так и принять меры. Обязательно изучите все комментарии в ```settings.py``` 
 
 - Всё установили и запускам, но получаем ошибку ```unknown encoding: utf8mb3```, скорее всего можно починить примерно так:
-```
-cd /usr/lib/python3.10/encodings
-cp utf_8.py utf8mb3.py
-```
+  ```
+  cd /usr/lib/python3.10/encodings
+  cp utf_8.py utf8mb3.py
+  ```
 
 
 - При ошибке ```'utf-8' codec can't decode bytes in position 790-791: unexpected end of data```
   помогло добавление параметра ```errors="ignore"```
   в ```.venv/lib/python3.10/site-packages/pymysqlreplication/events.py```
   строка 203 в параметр
-```
-.decode("utf-8", errors="ignore"): self.query = self.packet.read(event_size - 13 - self.status_vars_length - self.schema_length - 1).decode("utf-8", errors="ignore")
-```
+  ```
+  .decode("utf-8", errors="ignore"): self.query = self.packet.read(event_size - 13 - self.status_vars_length - self.schema_length - 1).decode("utf-8", errors="ignore")
+  ```
 
 
 - Ошибка "DB::Exception: Too many parts (600). Merges are processing significantly slower than inserts".
-Описание как бороться здесь: [clickhouse.com/docs/knowledgebase/exception-too-many-parts](https://clickhouse.com/docs/knowledgebase/exception-too-many-parts)
-Если кратко, то: главное требование при вставке в ClickHouse: никогда не отправлять слишком много запросов в секунду.
-В идеале - одна вставка в секунду/в несколько секунд, с UPDATE и DELETE нужно быть еще аккуратнее, а в идеале вообще избегать их.
-Один из вариантов, как избежать UPDATE описан в [settings.tables_not_updated](#tables_not_updated)
+
+  Описание как бороться здесь: [clickhouse.com/docs/knowledgebase/exception-too-many-parts](https://clickhouse.com/docs/knowledgebase/exception-too-many-parts)
+  Если кратко, то: главное требование при вставке в ClickHouse: никогда не отправлять слишком много запросов в секунду.
+  В идеале - одна вставка в секунду/в несколько секунд, с UPDATE и DELETE нужно быть еще аккуратнее, а в идеале вообще избегать их.
+  Один из вариантов, как избежать UPDATE описан в [settings.tables_not_updated](#tables_not_updated)
+
+- Ошибка, что **не хватает в талице столбца**, выглядит примерно так: ```ERROR = ServerException('DB::Exception: No such column custom_dimension_6 in table matomo.matomo_log_visit ...```
+
+  Необходимо разобраться почему столбца не хватает. Например, могли обновить matomo или добавить кастомное поле. 
+  Как добавлять столбцы описано [в инструкции ClickHouse: ADD COLUMN](https://clickhouse.com/docs/ru/sql-reference/statements/alter/column#alter_add-column)
 
 
 
@@ -203,7 +209,7 @@ RIGHT JOIN (
 ) t1 ON t2.idlink_va = t1.idlink_va
 ```
 - Перед обновлением matomo НЕОБХОДИМО (!!!) изучить что меняется. В случае, если меняется структура базы данных, то нужно проработать план обновления (перед
-  обновой сначала провести полный обмен с остановкой базы данных matomo, после этого привести стуртуру баз данных в соотвествите и т.д.)
+  обновой сначала провести полный обмен с остановкой базы данных matomo, после этого привести структуру(метаданные) баз данных в соответствите и т.д.)
 - За один запуск matomo2clickhouse переливает не все бинлоги, а только то, что вы настроите в ```settings.py``` (например, можно настроить время работы и/или
   количество строк). Не рекомендуется слишком долгое выполнение и слишком много строк. Например, для тестирования достаточно 5-10 минут. В прод: запускать раз в
   час на 50 минут.
