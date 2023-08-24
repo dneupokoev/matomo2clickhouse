@@ -174,6 +174,14 @@ crontab -e
   Необходимо разобраться почему столбца не хватает. Например, могли обновить matomo или добавить кастомное поле. 
   Как добавлять столбцы описано [в инструкции ClickHouse: ADD COLUMN](https://clickhouse.com/docs/ru/sql-reference/statements/alter/column#alter_add-column)
 
+- Ошибка "DB::Exception: There is no supertype for types String, Float64 because some of them are String/FixedString and some of them are not."
+
+  Означает, что в поле String пытаемся записать Float64. Скорее всего изначально тип поля выбрали неправильно. Нужно найти это поле и таблицу, править (изменить тип поля) примерно так:
+  ```
+  ALTER TABLE `matomo`.`matomo_goal` MODIFY COLUMN `revenue` Float64
+  ```
+
+
 
 
 ### ВНИМАНИЕ!
