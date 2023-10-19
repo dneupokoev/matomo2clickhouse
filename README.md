@@ -184,6 +184,38 @@ crontab -e
 
 
 
+### Принудительная отправка строки таблицы в репликацию
+
+***ВНИМАНИЕ!!! Всё на свой страх и риск! Очень легко БЕЗВОЗВРАТНО убить данные!!!***
+
+- Для примера будем переносить данные из таблицы matomo_site_url
+```
+SELECT * FROM matomo.matomo_site_url;
+```
+- Чтобы принудительно отправить строку в репликацию выполнить последовательно запросы. Для небольших таблиц можно выполнять без WHERE - можно переносить сразу полностью таблицу
+```
+-- сначала создаем временную таблицу с нужной строкой
+CREATE TEMPORARY TABLE matomo.tmp_tbl SELECT * FROM matomo.matomo_site_url WHERE `idsite` = '20';
+```
+```
+-- проверим, что всё создалось
+-- SELECT * FROM matomo.tmp_tbl;
+```
+***ВНИМАНИЕ!!! Если долго данных не будет, то ОБЯЗАТЕЛЬНО возникнут проблемы! Между DELETE и INSERT должно быть МИНИМУМ времени!!!***
+```
+-- удалим строку в исходной таблице 
+DELETE FROM `matomo`.`matomo_site_url` WHERE (`idsite` = '20');
+-- вставим строку из временной таблицы
+INSERT INTO matomo.matomo_site_url SELECT * FROM matomo.tmp_tbl WHERE `idsite` = '20';
+```
+- Удалим временную таблицу:
+```
+DROP TEMPORARY TABLE IF EXISTS matomo.tmp_tbl;
+```
+
+
+
+
 ### ВНИМАНИЕ!
 
 - Поробности о работе с дублями строк в [doc_old_duplicates.md](./doc_old_duplicates.md)
