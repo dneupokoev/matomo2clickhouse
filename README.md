@@ -96,6 +96,7 @@ matomo2clickhouse.py
 
 
 
+
 ### Дополнительно
 
 - Обратите внимание на описание внутри ```settings.py``` - там все настройки
@@ -107,6 +108,7 @@ matomo2clickhouse.py
 ```
 ALTER TABLE matomo.log_replication DELETE WHERE created_at < '2023-01-01 00:00:00'
 ```
+
 
 
 
@@ -133,6 +135,7 @@ crontab -e
 ```
 
 ВНИМАНИЕ!!! отредактируйте содержимое файла ```matomo2clickhouse_cron.sh``` и сделайте его исполняемым
+
 
 
 
@@ -184,9 +187,35 @@ crontab -e
 
 
 
+### Полключаем базу из MySQL в ClickHouse для обмена данными между ClickHouse и MySQL
+
+Официальная инструкция от ClickHouse: https://clickhouse.com/docs/ru/engines/database-engines/mysql
+
+Данное действие может понадобиться, например, для переливки данных из MySQL в ClickHouse, для проверки целостности данных и т.д.
+
+- Полключаем базу из MySQL в ClickHouse:
+```
+CREATE DATABASE mysql_matomo ENGINE = MySQL('localhost:3306', 'dbname', 'my_user', 'user_password')
+```
+- Проверяем, что база данных mysql_matomo появилась в ClickHouse:
+```
+SHOW DATABASES
+SHOW TABLES FROM mysql_matomo
+```
+- Делаем запрос к таблице из базы MySQL:
+```
+SELECT * FROM mysql_matomo.matomo_site_url
+```
+- Далее между ClickHouse и MySQL можно данные джойнить, делать инсерты и прочее...
+
+
+
+
 ### Принудительная отправка строки таблицы в репликацию
 
 ***ВНИМАНИЕ!!! Всё на свой страх и риск! Очень легко БЕЗВОЗВРАТНО убить данные!!!***
+
+В этом примере отправка строки происходит через удаление и добавление, поэтому возможны неприятные сюрпризы и вы должны четко понимать что делаете.
 
 - Для примера будем переносить данные из таблицы matomo_site_url
 ```
@@ -201,11 +230,15 @@ CREATE TEMPORARY TABLE matomo.tmp_tbl SELECT * FROM matomo.matomo_site_url WHERE
 -- проверим, что всё создалось
 -- SELECT * FROM matomo.tmp_tbl;
 ```
-***ВНИМАНИЕ!!! Если долго данных не будет, то ОБЯЗАТЕЛЬНО возникнут проблемы! Между DELETE и INSERT должно быть МИНИМУМ времени!!!***
 ```
--- удалим строку в исходной таблице 
-DELETE FROM `matomo`.`matomo_site_url` WHERE (`idsite` = '20');
--- вставим строку из временной таблицы
+-- удалим строку в ИТОГОВОЙ таблице (в clickhouse)
+DELETE FROM matomo.matomo_site_url WHERE `idsite` = '20';
+```
+***ВНИМАНИЕ!!! Если в mysql долго данных не будет, то ОБЯЗАТЕЛЬНО возникнут проблемы в работе matomo! Между DELETE и INSERT должно быть МИНИМУМ времени!!!***
+```
+-- удалим строку в ИСХОДНОЙ таблице (в mysql)
+DELETE FROM matomo.matomo_site_url WHERE `idsite` = '20';
+-- вставим строку из временной таблицы в ИСХОДНУЮ (в mysql)
 INSERT INTO matomo.matomo_site_url SELECT * FROM matomo.tmp_tbl WHERE `idsite` = '20';
 ```
 - Удалим временную таблицу:
@@ -258,6 +291,7 @@ RIGHT JOIN (
   сегодня включили репликацию, то данные будут переливаться только с этого момента. Если в какой-то момент вы удалите файл репликации, а он нужен
   matomo2clickhouse, то переливка остановится с ошибкой. Если вы полностью очистите таблицу ```ClickHouse.log_replication```, то будут переливаться все
   имеющиеся бинлоги, не зависимо от того переливались ли они ранее.
+
 
 
 
