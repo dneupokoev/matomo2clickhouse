@@ -5,7 +5,14 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-dv_file_version = '230727.01'
+dv_file_version = '231116.01'
+#
+# 231116.01
+# + добавил параметр settings.CONST_TBL_NOT_DELETE_OLD - словарь с таблицами, для которых не надо удалять старые данные, если они удалены в самом matomo.
+# + добавил проверку даты для строк delete (если дата старая, то игнорируем эту строку и выполнять на итоговой БД не будем: обработчик для settings.CONST_TBL_NOT_DELETE_OLD)
+# + считаю количество отклоненных удалений и вывожу в лог
+# + немного почистил код от рудиментов
+#
 # 230727.01
 # + добавил settings.sql_execute_at_end_matomo2clickhouse: скрипты, которые выполнятся в конце работы matomo2clickhouse (можно использовать для удаления дублей или для других задач)
 #
@@ -116,6 +123,7 @@ logger.info(f'{settings_replication_max_minutes = }')
 logger.info(f'{settings.LEAVE_BINARY_LOGS_IN_DAYS = }')
 logger.info(f'{settings.replication_tables = }')
 logger.info(f'{settings.tables_not_updated = }')
+logger.info(f'{settings.CONST_TBL_NOT_DELETE_OLD = }')
 logger.info(f'{settings.sql_execute_at_end_matomo2clickhouse = }')
 #
 #
@@ -188,8 +196,8 @@ class Binlog2sql(object):
 
     def __init__(self, connection_mysql_setting, connection_clickhouse_setting,
                  start_file=None, start_pos=None, end_file=None, end_pos=None,
-                 start_time=None, stop_time=None, only_schemas=None, only_tables=None, no_pk=False,
-                 flashback=False, stop_never=False, back_interval=1.0, only_dml=True, sql_type=None, for_clickhouse=False,
+                 start_time=None, stop_time=None, only_schemas=None, only_tables=None,
+                 stop_never=False, back_interval=1.0, only_dml=True, sql_type=None, for_clickhouse=False,
                  log_id=None):
         """
         conn_mysql_setting: {'host': 127.0.0.1, 'port': 3306, 'user': user, 'passwd': passwd, 'charset': 'utf8'}
@@ -231,7 +239,7 @@ class Binlog2sql(object):
         #
         self.only_schemas = only_schemas if only_schemas else None
         self.only_tables = only_tables if only_tables else None
-        self.no_pk, self.flashback, self.stop_never, self.back_interval = (no_pk, flashback, stop_never, back_interval)
+        self.stop_never, self.back_interval = (stop_never, back_interval)
         self.for_clickhouse = for_clickhouse
         # print(f"{self.for_clickhouse = }")
         self.only_dml = only_dml
@@ -342,16 +350,11 @@ class Binlog2sql(object):
             dv_sql_log = ''
             # Создаем пустой словарь для инсертов в clickhouse
             dv_sql_4insert_dict = dict()
-            logger.debug(f"{self.flashback = }")
-            if self.flashback:
-                self.log_id = self.log_id - settings.replication_batch_size
-                if self.log_id < 0:
-                    dv_count_sql_for_ch = dv_count_sql_for_ch - self.log_id
-                    self.log_id = 0
             e_start_pos, last_pos = stream.log_pos, stream.log_pos
             # to simplify code, we do not use flock for tmp_file.
             tmp_file = create_unique_file('%s.%s' % (self.conn_mysql_setting['host'], self.conn_mysql_setting['port']))
             with temp_open(tmp_file, "w") as f_tmp, self.connection.cursor() as cursor:
+                dv_tbl_not_delete = settings.CONST_TBL_NOT_DELETE_OLD
                 for binlog_event in stream:
                     logger.debug(f"***")
                     logger.debug(f"for binlog_event in stream: {stream.log_file = }")
@@ -379,18 +382,18 @@ class Binlog2sql(object):
                             logger.debug(f" for binlog_event in stream : break")
                             break
                         # else:
-                        #     raise ValueError('unknown binlog file or position')
-
+                        #     logger.warning(f"unknown binlog file or position")
+                        #     # raise ValueError('unknown binlog file or position')
+                        #     pass
+                    #
                     if isinstance(binlog_event, QueryEvent) and binlog_event.query == 'BEGIN':
                         e_start_pos = last_pos
                         logger.debug(f" e_start_pos = last_pos : {e_start_pos = }")
-
+                    #
                     if isinstance(binlog_event, QueryEvent) and not self.only_dml:
                         sql, log_pos_start, log_pos_end, log_shema, log_table, log_time, sql_type, sql_4insert_table, sql_4insert_values = concat_sql_from_binlog_event(
                             cursor=cursor,
                             binlog_event=binlog_event,
-                            no_pk=self.no_pk,
-                            flashback=self.flashback,
                             for_clickhouse=self.for_clickhouse)
                         if sql:
                             print(sql)
@@ -413,39 +416,70 @@ class Binlog2sql(object):
                                 pass
                             logger.debug(f"AFTER: {row = }")
                             logger.debug(f"***")
-                            dv_count_sql_for_ch += 1
-                            logger.debug(f" {dv_count_sql_for_ch = }")
+                            #
+                            # Вызываем обработчик для строки репликации (получим строку sql)
                             sql, log_pos_start, log_pos_end, log_shema, log_table, log_time, sql_type, sql_4insert_table, sql_4insert_values = concat_sql_from_binlog_event(
                                 cursor=cursor,
                                 binlog_event=binlog_event,
-                                no_pk=self.no_pk,
                                 row=row,
-                                flashback=self.flashback,
                                 e_start_pos=e_start_pos,
                                 for_clickhouse=self.for_clickhouse)
+                            #
                             logger.debug(f" {sql = }")
                             logger.debug(f" {sql_4insert_values = }")
                             logger.debug(f" {type(sql_4insert_values) = }")
-                            if self.for_clickhouse is True:
+                            #
+                            # Проверяем даты для строк delete (если дата старая, то игнорируем эту строку и выполнять на итоговой БД не будем)
+                            is_row_need = 1
+                            try:
+                                # Если тип строки "удаление", то будем проверять нужно удалять или нет
+                                if sql_type == 'DELETE':
+                                    dv_count_days = 0
+                                    # Проверяем входит ли таблица из текущей строки в словарь исключенных из удаления таблиц.
+                                    if binlog_event.table in list(dv_tbl_not_delete.keys()):
+                                        dv_date = row['values'].get(dv_tbl_not_delete[binlog_event.table]['col_date'], datetime.datetime.now())
+                                        dv_count_days = (datetime.datetime.now() - dv_date).days
+                                    if dv_count_days > 31:
+                                        # Если запрос хочет удалить данные, которым больше Х дней, то такой запрос выполнять на итоговой базе не будем.
+                                        # Не удаляем старые данные из итоговой БД!
+                                        is_row_need = 0
+                                        # Считаем сколько попыток удаления отклонили
+                                        dv_tbl_not_delete[binlog_event.table]['rejected count'] = dv_tbl_not_delete[binlog_event.table].get('rejected count',0) + 1
+                                        logger.debug(f"ОТКЛОНЕНО УДАЛЕНИЕ СТРОКИ (создана {dv_count_days} дней назад): {sql}")
+                            except Exception as ERROR:
+                                logger.error(f"Проверка даты для строк delete: {ERROR = }")
+                                pass
+                            # # ТЕСТ На время тестирования все строки будем обрабатывать. После тестирования - УДАЛИТЬ!
+                            # if is_row_need == 0:
+                            #     # Текущую строку заливать в итоговую базу данных НЕ БУДЕМ
+                            #     logger.info(f" TEST!!! Текущую строку заливать в итоговую базу данных НЕ БУДЕМ")
+                            #     logger.debug(f"***")
+                            #     is_row_need = 1
+                            #     pass
+                            if is_row_need == 0:
+                                # Текущую строку заливать в итоговую базу данных НЕ БУДЕМ
+                                logger.debug(f"Текущую строку заливать в итоговую базу данных НЕ БУДЕМ")
+                                logger.debug(f"***")
                                 pass
                             else:
-                                sql += ' file %s' % (stream.log_file)
-
-                            # print(dv_sql_log)
-                            # print(sql)
-                            # print(f"{log_shema = }")
-                            # print(f"{log_table = }")
-                            # print(f"{stream.log_file = }")
-                            # print(f"{log_pos_start = }")
-                            # print(f"{log_pos_end = }")
-                            # print(f"{log_time = }")
-                            if self.flashback:
-                                self.log_id += 1
-                                dv_sql_log = "ALTER TABLE `%s`.`log_replication` DELETE WHERE `dateid`=%s;" % (log_shema, self.log_id)
-                                # f_tmp.write(dv_sql_log + '\n' + sql + '\n')
-                                # f_tmp.write(sql + '\n')
-                                f_tmp.write(dv_sql_log + '\n')
-                            else:
+                                # текущую строку заливать в итоговую базу данных БУДЕМ
+                                #
+                                logger.debug(f"***")
+                                dv_count_sql_for_ch += 1
+                                logger.debug(f" {dv_count_sql_for_ch = }")
+                                if self.for_clickhouse is True:
+                                    pass
+                                else:
+                                    sql += ' file %s' % (stream.log_file)
+                                #
+                                # print(dv_sql_log)
+                                # print(sql)
+                                # print(f"{log_shema = }")
+                                # print(f"{log_table = }")
+                                # print(f"{stream.log_file = }")
+                                # print(f"{log_pos_start = }")
+                                # print(f"{log_pos_end = }")
+                                # print(f"{log_time = }")
                                 logger.debug(f"execute sql to clickhouse | begin")
                                 self.log_id += 1
                                 dv_sql_log = "INSERT INTO `%s`.`log_replication` (`dateid`,`log_time`,`log_file`,`log_pos_start`,`log_pos_end`,`sql_type`)" \
@@ -460,7 +494,8 @@ class Binlog2sql(object):
                                     # или тип запроса не из списка ('INSERT', 'INS-UPD')
                                     # или в запросе есть перевод каретки (СТРОК в запросе > 1)
                                     # или в запросе есть управляющий символ
-                                    logger.info(f"LINE_BY_LINE: {(sql_type not in ('INSERT', 'INS-UPD')) = } | {(len(sql.splitlines()) > 1) = } | {(dv_find_text.search(sql) is not None) = }")
+                                    logger.info(
+                                        f"LINE_BY_LINE: {(sql_type not in ('INSERT', 'INS-UPD')) = } | {(len(sql.splitlines()) > 1) = } | {(dv_find_text.search(sql) is not None) = }")
                                     # ВНИМАНИЕ!!! обязательно сначала надо применить предыдущие sql чтобы апдейты и удаления корректно сработали
                                     if len(dv_sql_4insert_dict) > 0:
                                         # попадаем сюда если dv_sql_4insert_dict не пустой
@@ -493,7 +528,8 @@ class Binlog2sql(object):
                                         # попадаем сюда если в запрос собрали строк больше, чем replication_batch_sql
                                         # или обработали уже больше replication_batch_size запросов
                                         # (это нужно чтобы не слишком много съедать памяти)
-                                        logger.info(f"BATCH: {(dv_count_values_from_dv_sql_4insert_dict >= dv_replication_batch_sql) = } | {(dv_count_sql_for_ch >= settings.replication_batch_size) = }")
+                                        logger.info(
+                                            f"BATCH: {(dv_count_values_from_dv_sql_4insert_dict >= dv_replication_batch_sql) = } | {(dv_count_sql_for_ch >= settings.replication_batch_size) = }")
                                         dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(dv_sql_4insert_dict=dv_sql_4insert_dict)
                                 logger.debug(f"execute sql to clickhouse | end")
                     #
@@ -533,8 +569,11 @@ class Binlog2sql(object):
                 #
                 stream.close()
                 f_tmp.close()
-                if self.flashback:
-                    self.print_rollback_sql(filename=tmp_file)
+                #
+                # Если из матомо удалили старую строку, а в кликхаусе её удалять не надо (см.логику), то выведем сообщение о количестве проигнорированных попыток удаления
+                for dv_tbl_line in list(dv_tbl_not_delete.keys()):
+                    if dv_tbl_not_delete[dv_tbl_line].get('rejected count', 0) > 0:
+                        logger.info(f"ОТКЛОНЕНО УДАЛЕНИЕ из таблицы {dv_tbl_line} СТАРЫХ строк: {dv_tbl_not_delete[dv_tbl_line].get('rejected count', 0)} шт.")
                 #
                 # чистим старые логи
                 if settings.LEAVE_BINARY_LOGS_IN_DAYS > 0 and settings.LEAVE_BINARY_LOGS_IN_DAYS < 99:
@@ -577,23 +616,6 @@ class Binlog2sql(object):
                 else:
                     f_text = f"{ERROR}"
         return f_status, f_text
-
-    def print_rollback_sql(self, filename):
-        """print rollback sql from tmp_file"""
-        logger.debug(f"print_rollback_sql")
-        with open(filename, mode="rb", encoding='utf-8') as f_tmp:
-            batch_size = 1000
-            i = 0
-            for line in reversed_lines(f_tmp):
-                print(line.rstrip())
-                with Client(**self.conn_clickhouse_setting) as ch_cursor:
-                    ch_cursor.execute(line.rstrip())
-                if i >= batch_size:
-                    i = 0
-                    if self.back_interval:
-                        print('SELECT SLEEP(%s);' % self.back_interval)
-                else:
-                    i += 1
 
     def __del__(self):
         pass
@@ -715,7 +737,7 @@ if __name__ == '__main__':
                                 end_file=args.end_file, end_pos=args.end_pos,
                                 start_time=args.start_time, stop_time=args.stop_time,
                                 only_schemas=args.databases, only_tables=args.tables,
-                                no_pk=args.no_pk, flashback=args.flashback, stop_never=args.stop_never,
+                                stop_never=args.stop_never,
                                 back_interval=args.back_interval, only_dml=args.only_dml,
                                 sql_type=args.sql_type, for_clickhouse=args.for_clickhouse,
                                 log_id=log_id)

@@ -5,8 +5,11 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
+# 231116.01
+# + добавил параметр settings.CONST_TBL_NOT_DELETE_OLD - словарь с таблицами, для которых не надо удалять старые данные, если они удалены в самом matomo.
+#
 # 230727.01
-# + добавил settings.sql_execute_at_end_matomo2clickhouse: скрипты, которые выполнятся в конце работы matomo2clickhouse (можно использовать для удаления дублей или для других задач)
+# + добавил параметр settings..sql_execute_at_end_matomo2clickhouse: скрипты, которые выполнятся в конце работы matomo2clickhouse (можно использовать для удаления дублей или для других задач)
 #
 # 230403:
 # + добавил параметр settings.EXECUTE_CLICKHOUSE (нужен для тестирования) - True: выполнять insert в ClickHouse (боевой режим); False: не выполнять insert (для тестирования и отладки)
@@ -56,10 +59,11 @@ PATH_TO_LOG = '/var/log/matomo2clickhouse/'
 #
 #
 # Какое максимальное количество запросов обрабатывать за один вызов скрипта
-# replication_batch_size - общее количество строк
+# replication_batch_size - общее количество строк (ВНИМАНИЕ! минимум 1!!! иначе ничего обрабатывать не будет)
+# replication_batch_size = 10
 replication_batch_size = 1000000
 #
-# replication_batch_sql - строк в одном коннекте (ВНИМАНИЕ! для построчного выполнения = 0)
+# replication_batch_sql - строк в одном коннекте (ВНИМАНИЕ! Для построчного выполнения = 0)
 # Оптимально около 2000. Если сделать слишком мало, то будет медленно. Если сделать слишком много, то либо съест ОЗУ, либо ClickHouse не сможет обработать такой большой запрос.
 replication_batch_sql = 2000
 #
@@ -116,13 +120,21 @@ tables_not_updated = [
     'matomo_log_link_visit_action',
 ]
 #
+# CONST_TBL_NOT_DELETE_OLD - словарь с таблицами, для которых не надо удалять старые данные, если они удалены в самом matomo.
+# col_date - название колонки, дату в которой будем сравнивать с текущей датой.
+CONST_TBL_NOT_DELETE_OLD = {
+    'matomo_log_visit': {'col_date': 'visit_first_action_time'},
+    'matomo_log_link_visit_action': {'col_date': 'server_time'},
+    'matomo_log_conversion': {'col_date': 'server_time'},
+}
+#
 # Удаление старых дубликатов
 # Если tables_not_updated заполнено, то в указанных таблицах будут копиться старые устаревшие данные.
 # Эти данные можно отсекать на уровне запросов (например, при подготовке витрин данных), а можно удалять.
 # Для удаления нужно заполнить список tables_clear_old_duplicates запросами, которые выполнятся в конце работы matomo2clickhouse:
 sql_execute_at_end_matomo2clickhouse = [
     '''
-    -- делает выборку dateid, которые нужно удалить, отправляет на удаление и ждет окончания мутации
+    /* делает выборку dateid, которые нужно удалить, отправляет на удаление и ждет окончания мутации */
     ALTER TABLE {CH_matomo_dbname}.matomo_log_link_visit_action DELETE
     WHERE 1=1
     AND server_time >= (DATE_sub(NOW(), INTERVAL {dv_days_ago_start} DAY))
@@ -150,7 +162,7 @@ sql_execute_at_end_matomo2clickhouse = [
     SETTINGS mutations_sync = 1;
     '''.format(CH_matomo_dbname=CH_matomo_dbname, dv_days_ago_start=14, dv_days_ago_finish=0),
     '''
-    -- делает выборку dateid, которые нужно удалить, отправляет на удаление и ждет окончания мутации
+    /* делает выборку dateid, которые нужно удалить, отправляет на удаление и ждет окончания мутации */
     ALTER TABLE {CH_matomo_dbname}.matomo_log_visit DELETE
     WHERE 1=1
     AND visit_first_action_time >= (DATE_sub(NOW(), INTERVAL {dv_days_ago_start} DAY))
@@ -239,7 +251,7 @@ import telebot
 #
 def f_telegram_send_message(tlg_bot_token='', tlg_chat_id=None, txt_to_send='', txt_mode=None, txt_type='', txt_name=''):
     '''
-    функция отправляет в указанный чат телеграма текст
+    Функция отправляет в указанный чат телеграма текст
     Входные параметры: токен, чат, текст, тип форматирования текста (HTML, MARKDOWN)
     '''
     if txt_type == 'ERROR':
