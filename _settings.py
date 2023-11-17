@@ -155,6 +155,13 @@ CONST_TBL_NOT_DELETE_OLD = {
 #         GROUP BY date(server_time)
 #         ORDER BY date(server_time) DESC
 #
+#        -- Смотрим какая самая ранняя дата в таблицах осталась:
+#        (SELECT 'matomo_log_visit' AS tbl, idvisit AS id_min, visit_first_action_time AS date_min FROM matomo.matomo_log_visit ORDER BY idvisit ASC LIMIT 1)
+#        UNION
+#        (SELECT 'matomo_log_conversion' AS tbl, idvisit AS id_min, server_time AS date_min FROM matomo.matomo_log_conversion ORDER BY idvisit ASC LIMIT 1)
+#        UNION
+#        (SELECT 'matomo_log_link_visit_action' AS tbl, idlink_va AS id_min, server_time AS date_min FROM matomo.matomo_log_link_visit_action ORDER BY idlink_va ASC LIMIT 1)
+#
 # ВНИМАНИЕ!!! запросы будут выполняться в базе MySQL
 # Чтобы ничего не удалялось в MySQL - нужно создать пустой словарь CONST_TBL_FOR_DELETE_OLD = {}. Для удаления словарь должен быть заполнен.
 CONST_TBL_FOR_DELETE_OLD = {}
