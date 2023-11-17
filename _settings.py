@@ -5,6 +5,9 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
+# 231116.02
+# + добавил параметр settings.CONST_TBL_FOR_DELETE_OLD - словарь с запросами для удаления старых записей из таблиц БД MySQL.matomo (чтобы облегчить базу MySQL)
+#
 # 231116.01
 # + добавил параметр settings.CONST_TBL_NOT_DELETE_OLD - словарь с таблицами, для которых не надо удалять старые данные, если они удалены в самом matomo.
 #
@@ -42,8 +45,8 @@ CH_matomo_password = 'password'
 DEBUG = False
 #
 # EXECUTE_CLICKHOUSE - True: выполнять insert в ClickHouse (боевой режим); False: не выполнять insert (для тестирования и отладки)
-EXECUTE_CLICKHOUSE = True
-# EXECUTE_CLICKHOUSE = False
+# EXECUTE_CLICKHOUSE = True
+EXECUTE_CLICKHOUSE = False
 #
 # создаем папку для логов:
 # sudo mkdir /var/lib/matomo2clickhouse
@@ -67,7 +70,7 @@ replication_batch_size = 1000000
 # Оптимально около 2000. Если сделать слишком мало, то будет медленно. Если сделать слишком много, то либо съест ОЗУ, либо ClickHouse не сможет обработать такой большой запрос.
 replication_batch_sql = 2000
 #
-# Какое максимальное количество файлов binlog-а обрабатывать за один вызов (если поставить слишком много, то может надолго подвиснуть)
+# Какое максимальное количество файлов binlog-а обрабатывать за один вызов (если поставить слишком много, то может надолго подвиснуть в поиске нужной точки)
 replication_max_number_files_per_session = 20
 #
 # максимальное количество минут работы скрипта до остановки (0 - без остановки, int - может понадобиться, чтобы гибче управлять автозапуском)
@@ -127,6 +130,85 @@ CONST_TBL_NOT_DELETE_OLD = {
     'matomo_log_link_visit_action': {'col_date': 'server_time'},
     'matomo_log_conversion': {'col_date': 'server_time'},
 }
+#
+# ВНИМАНИЕ!!! В этой секции настраивается БЕЗВОЗВРАТНОЕ удаление! Будьте аккуратны!
+# Удаление старых записей из таблиц БД MySQL.matomo (чтобы облегчить базу MySQL)
+#
+#         /* Смотрим в КликХаусе(!!!) сколько примерно записей в день, чтобы знать по сколько записей удалять ежедневно за предыдущие периоды */
+#         /* В скрипт удаления нужно вписать двухкратное значение в LIMIT, но В ОБЩЕМ КОЛИЧЕСТВЕ не более 500000 (иначе изучай скрипт и вноси правки, чтобы не создать коллапс) */
+#
+#         SELECT date(visit_first_action_time) AS date, count(*) AS count
+#         FROM matomo.matomo_log_visit
+#         WHERE date(visit_first_action_time) > Date(now() - interval 30 day)
+#         GROUP BY date(visit_first_action_time)
+#         ORDER BY date(visit_first_action_time) DESC
+#
+#         SELECT date(server_time) AS date, count(*) AS count
+#         FROM matomo.matomo_log_link_visit_action
+#         WHERE date(server_time) > Date(now() - interval 30 day)
+#         GROUP BY date(server_time)
+#         ORDER BY date(server_time) DESC
+#
+#         SELECT date(server_time) AS date, count(*) AS count
+#         FROM matomo.matomo_log_conversion
+#         WHERE date(server_time) > Date(now() - interval 30 day)
+#         GROUP BY date(server_time)
+#         ORDER BY date(server_time) DESC
+#
+# ВНИМАНИЕ!!! запросы будут выполняться в базе MySQL
+# Чтобы ничего не удалялось в MySQL - нужно создать пустой словарь CONST_TBL_FOR_DELETE_OLD = {}. Для удаления словарь должен быть заполнен.
+CONST_TBL_FOR_DELETE_OLD = {}
+# CONST_TBL_FOR_DELETE_OLD = {
+#     'matomo_log_visit':
+#         {'sql_get_max_id':
+#              '''
+#     SELECT t_id.idvisit AS id_max
+#     FROM (
+#         SELECT idvisit, visit_first_action_time
+#         FROM matomo.matomo_log_visit
+#         ORDER BY idvisit ASC
+#         LIMIT 10001
+#         ) AS t_id
+#     WHERE Date(t_id.visit_first_action_time) < Date(now() - interval 180 day)
+#     ORDER BY t_id.idvisit DESC
+#     LIMIT 1
+#             ''',
+#          'sql_count': 'SELECT count(idvisit) AS row_count FROM matomo.matomo_log_visit WHERE idvisit < {id_max}',
+#          'sql_delete': 'DELETE FROM matomo.matomo_log_visit WHERE idvisit < {id_max}'},
+#     'matomo_log_link_visit_action':
+#         {'sql_get_max_id':
+#              '''
+#     SELECT t_id.idlink_va AS id_max
+#     FROM (
+#         SELECT idlink_va, server_time
+#         FROM matomo.matomo_log_link_visit_action
+#         ORDER BY idlink_va ASC
+#         LIMIT 10001
+#         ) AS t_id
+#     WHERE Date(t_id.server_time) < Date(now() - interval 180 day)
+#     ORDER BY t_id.idlink_va DESC
+#     LIMIT 1
+#             ''',
+#          'sql_count': 'SELECT count(idlink_va) AS row_count FROM matomo.matomo_log_link_visit_action WHERE idlink_va < {id_max}',
+#          'sql_delete': 'DELETE FROM matomo.matomo_log_link_visit_action WHERE idlink_va < {id_max}'},
+#     'matomo_log_conversion':
+#         {'sql_get_max_id':
+#              '''
+#     SELECT t_id.idvisit AS id_max
+#     FROM (
+#         SELECT idvisit, server_time
+#         FROM matomo.matomo_log_conversion
+#         ORDER BY idvisit ASC
+#         LIMIT 10001
+#         ) AS t_id
+#     WHERE Date(t_id.server_time) < Date(now() - interval 180 day)
+#     ORDER BY t_id.idvisit DESC
+#     LIMIT 1
+#             ''',
+#          'sql_count': 'SELECT count(idvisit) AS row_count FROM matomo.matomo_log_conversion WHERE idvisit < {id_max}',
+#          'sql_delete': 'DELETE FROM matomo.matomo_log_conversion WHERE idvisit < {id_max}'},
+# }
+#
 #
 # Удаление старых дубликатов
 # Если tables_not_updated заполнено, то в указанных таблицах будут копиться старые устаревшие данные.
@@ -205,7 +287,7 @@ SEND_SUCCESS_REPEATED_NOT_EARLIER_THAN_MINUTES = 360
 # создать бота - получить токен - создать группу - бота сделать администратором - получить id группы
 TLG_BOT_TOKEN = 'your_bot_token'
 # TLG_CHAT_FOR_SEND = идентификатор группы
-# Как узнать идентификтор группы:
+# Как узнать идентификатор группы:
 # 1. Добавить бота в нужную группу;
 # 2. Написать хотя бы одно сообщение в неё;
 # 3. Отправить GET-запрос по следующему адресу:

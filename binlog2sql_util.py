@@ -5,7 +5,10 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-binlog2sql_util_version = '231115.01'
+binlog2sql_util_version = '231117.01'
+#
+# 231117.01
+# + удалил "лишнее" и устаревшее из кода, изменил работу с DELETE
 #
 # 230719.01:
 # + отключил асинхронность мутаций (update и delete теперь будут ждать завершения мутаций на данном сервере), чтобы не отваливалось из-за большого числа delete

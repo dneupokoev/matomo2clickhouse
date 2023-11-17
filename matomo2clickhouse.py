@@ -5,9 +5,9 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-dv_file_version = '231116.01'
+dv_file_version = '231117.01'
 #
-# 231116.01
+# 231117.01
 # + добавил параметр settings.CONST_TBL_NOT_DELETE_OLD - словарь с таблицами, для которых не надо удалять старые данные, если они удалены в самом matomo.
 # + добавил проверку даты для строк delete (если дата старая, то игнорируем эту строку и выполнять на итоговой БД не будем: обработчик для settings.CONST_TBL_NOT_DELETE_OLD)
 # + считаю количество отклоненных удалений и вывожу в лог
@@ -298,6 +298,50 @@ class Binlog2sql(object):
         except Exception as ERROR:
             logger.error(f"{ERROR = }")
 
+    def del_old_row_from_mysql(self):
+        logger.info(f"удаление старых записей из MySQL - begin")
+        try:
+            dv_txt_del_old = 'Старых записей для удаления не обнаружено'
+            self.connection = pymysql.connect(**self.conn_mysql_setting)
+            for dv_tbl_line in list(settings.CONST_TBL_FOR_DELETE_OLD.keys()):
+                dv_query = settings.CONST_TBL_FOR_DELETE_OLD[dv_tbl_line].get('sql_get_max_id', '')
+                # print(dv_query)
+                if dv_query != '':
+                    with self.connection.cursor() as cursor:
+                        # cursor.execute("SET SESSION max_statement_time = 600")
+                        cursor.execute(dv_query)
+                        dv_id_max = cursor.fetchone()
+                    if dv_id_max is not None:
+                        # print(dv_id_max[0])
+                        dv_query = settings.CONST_TBL_FOR_DELETE_OLD[dv_tbl_line].get('sql_count', '')
+                        # print(dv_query)
+                        if dv_query != '':
+                            dv_query = dv_query.replace('{id_max}', f"{dv_id_max[0]}")
+                            with self.connection.cursor() as cursor:
+                                # cursor.execute("SET SESSION max_statement_time = 600")
+                                cursor.execute(dv_query)
+                                dv_row_count = cursor.fetchone()
+                            if dv_row_count is not None:
+                                # print(dv_row_count[0])
+                                dv_query = settings.CONST_TBL_FOR_DELETE_OLD[dv_tbl_line].get('sql_delete', '')
+                                # print(dv_query)
+                                if dv_query != '':
+                                    dv_query = dv_query.replace('{id_max}', f"{dv_id_max[0]}")
+                                    logger.info(f"{dv_query}")
+                                    with self.connection.cursor() as cursor:
+                                        # cursor.execute("SET SESSION max_statement_time = 600")
+                                        cursor.execute(dv_query)
+                                    # Нужен коммит чтобы сохранилось удаление:
+                                    self.connection.commit()
+                                    dv_txt_del_old = f"УДАЛИЛИ из MySQL.matomo.{dv_tbl_line} {dv_row_count[0]} СТАРЫХ записей до id = {dv_id_max[0]}"
+                                    del dv_query
+                                    del dv_id_max
+                                    del dv_row_count
+                                    logger.info(f"{dv_txt_del_old}")
+            logger.info(f"удаление старых записей из MySQL - end")
+        except Exception as ERROR:
+            logger.error(f"{ERROR = }")
+
     def execute_in_clickhouse(self, dv_sql_4insert_dict={}):
         '''
         Функция обрабатывает полученный словарь, создает из него инсерты, выполняет на базе КликХауса, актуализирует и возвращает словарь
@@ -444,7 +488,8 @@ class Binlog2sql(object):
                                         # Не удаляем старые данные из итоговой БД!
                                         is_row_need = 0
                                         # Считаем сколько попыток удаления отклонили
-                                        dv_tbl_not_delete[binlog_event.table]['rejected count'] = dv_tbl_not_delete[binlog_event.table].get('rejected count',0) + 1
+                                        dv_tbl_not_delete[binlog_event.table]['rejected count'] = dv_tbl_not_delete[binlog_event.table].get('rejected count',
+                                                                                                                                            0) + 1
                                         logger.debug(f"ОТКЛОНЕНО УДАЛЕНИЕ СТРОКИ (создана {dv_count_days} дней назад): {sql}")
                             except Exception as ERROR:
                                 logger.error(f"Проверка даты для строк delete: {ERROR = }")
@@ -573,7 +618,7 @@ class Binlog2sql(object):
                 # Если из матомо удалили старую строку, а в кликхаусе её удалять не надо (см.логику), то выведем сообщение о количестве проигнорированных попыток удаления
                 for dv_tbl_line in list(dv_tbl_not_delete.keys()):
                     if dv_tbl_not_delete[dv_tbl_line].get('rejected count', 0) > 0:
-                        logger.info(f"ОТКЛОНЕНО УДАЛЕНИЕ из таблицы {dv_tbl_line} СТАРЫХ строк: {dv_tbl_not_delete[dv_tbl_line].get('rejected count', 0)} шт.")
+                        logger.info(f"ОТКЛОНЕНО УДАЛЕНИЕ из таблицы ClickHouse {dv_tbl_line} СТАРЫХ строк: {dv_tbl_not_delete[dv_tbl_line].get('rejected count', 0)} шт.")
                 #
                 # чистим старые логи
                 if settings.LEAVE_BINARY_LOGS_IN_DAYS > 0 and settings.LEAVE_BINARY_LOGS_IN_DAYS < 99:
@@ -581,6 +626,9 @@ class Binlog2sql(object):
                         self.clear_binlog(log_time=log_time)
                     except Exception as ERROR:
                         logger.error(f"self.clear_binlog(log_time=log_time): {ERROR = }")
+                #
+                # удаляем старые записи из MySQL (чтобы база стала меньше размером)
+                self.del_old_row_from_mysql()
         #
         except Exception as ERROR:
             f_status = 'ERROR'
