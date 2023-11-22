@@ -4,18 +4,18 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-jupyter = "*"
-clickhouse-driver = "*"
-ipykernel = "*"
-loguru = "*"
-autopep8 = "*"
 mysqlclient = "*"
+autopep8 = "*"
+loguru = "*"
+clickhouse-driver = "*"
 clickhouse-mysql = "*"
 mysql-replication = "*"
 argparse = "*"
 pytelegrambotapi = "*"
+jupyter = "*"
+ipykernel = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.10"
+python_version = "3.11"
