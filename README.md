@@ -32,6 +32,15 @@ Replication Matomo from MySQL to ClickHouse (Репликация Matomo: пер
 ```
 sudo apt install libmysqlclient-dev
 ```
+- Возможно понадобятся еще библиотеки (если не будет устанавливаться mysqlclient):
+```
+sudo apt install python3-dev
+sudo apt install build-essential
+sudo apt install pkg-config
+sudo apt install libmysqlclient-dev
+sudo apt install libmysqlclient21
+sudo apt install mariadb-client
+```
 
 - Для работы репликации в MySQL нужно включить binlog. Внимание: необходимо предусмотреть чтобы было достаточно места на диске для бинлога!
 ```
@@ -296,6 +305,9 @@ RIGHT JOIN (
 
 
 ### Версии
+
+231122.01
++ после ошибки теперь будет обрабатываться не всё заданное количество, а примерно в тысячу раз меньше = (settings.replication_batch_size // 1000) + 10
 
 231117.01
 + добавил параметр settings.CONST_TBL_NOT_DELETE_OLD - словарь с таблицами, для которых не надо удалять старые данные, если они удалены в самом matomo.

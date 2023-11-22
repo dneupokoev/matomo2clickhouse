@@ -5,7 +5,10 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-dv_file_version = '231117.01'
+dv_file_version = '231122.01'
+#
+# 231122.01
+# + после ошибки теперь будет обрабатываться не всё заданное количество, а примерно в тысячу раз меньше = (settings.replication_batch_size // 1000) + 10
 #
 # 231117.01
 # + добавил параметр settings.CONST_TBL_NOT_DELETE_OLD - словарь с таблицами, для которых не надо удалять старые данные, если они удалены в самом matomo.
@@ -569,12 +572,12 @@ class Binlog2sql(object):
                                     dv_sql_4insert_dict.setdefault(sql_4insert_table, []).append(sql_4insert_values)
                                     dv_count_values_from_dv_sql_4insert_dict = sum(map(len, dv_sql_4insert_dict.values()))
                                     if (dv_count_values_from_dv_sql_4insert_dict > dv_replication_batch_sql) or \
-                                            (dv_count_sql_for_ch > settings.replication_batch_size):
+                                            (dv_count_sql_for_ch > dv_replication_batch_size):
                                         # попадаем сюда если в запрос собрали строк больше, чем replication_batch_sql
                                         # или обработали уже больше replication_batch_size запросов
                                         # (это нужно чтобы не слишком много съедать памяти)
                                         logger.info(
-                                            f"BATCH: {(dv_count_values_from_dv_sql_4insert_dict >= dv_replication_batch_sql) = } | {(dv_count_sql_for_ch >= settings.replication_batch_size) = }")
+                                            f"BATCH: {(dv_count_values_from_dv_sql_4insert_dict >= dv_replication_batch_sql) = } | {(dv_count_sql_for_ch >= dv_replication_batch_size) = }")
                                         dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(dv_sql_4insert_dict=dv_sql_4insert_dict)
                                 logger.debug(f"execute sql to clickhouse | end")
                     #
@@ -583,7 +586,7 @@ class Binlog2sql(object):
                         last_pos = binlog_event.packet.log_pos
                     #
                     # если обработали заданное "максимальное количество запросов обрабатывать за один вызов", то прерываем цикл
-                    if dv_count_sql_for_ch > settings.replication_batch_size:
+                    if dv_count_sql_for_ch > dv_replication_batch_size:
                         dv_is_end_process_binlog = True
                         # break
                     # если обрабатывали дольше отведенного времени, то прерываем цикл
@@ -722,12 +725,15 @@ if __name__ == '__main__':
     logger.info(f"{dv_cfg_last_send_tlg_success = }")
     logger.info(f"{dv_cfg_last_run_is_success = }")
     #
-    # если последний запуск завершился ошибкой, то принудительно будем се запросы по одному
+    # если последний запуск завершился ошибкой, то принудительно будем выполнять все запросы по одному, а количество запросов уменьшим
     if dv_cfg_last_run_is_success == '0':
         dv_replication_batch_sql = 0
+        dv_replication_batch_size = (settings.replication_batch_size // 1000) + 10
     else:
         dv_replication_batch_sql = settings.replication_batch_sql
+        dv_replication_batch_size = settings.replication_batch_size
     logger.info(f"{dv_replication_batch_sql = }")
+    logger.info(f"{dv_replication_batch_size = }")
     #
     try:
         dv_file_lib_path = f"{settings.PATH_TO_LIB}/matomo2clickhouse.dat"
