@@ -5,7 +5,16 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-dv_file_version = '231122.01'
+dv_file_version = '231201.01'
+#
+# 231201.01
+# + добавил возможность подключения к базе данных MySQL через SSH (дополнительные параметры подключения: settings.SSH_*)
+# + добавил и изменил информативность ошибок (чтобы легче искать причины сбоев)
+#
+# 231123.01
+# + добавил возможность подключения к базе данных MySQL через SSH
+# + необходимо установить пакет: pipenv install sshtunnel
+# + необходимо заполнить дополнительные параметры подключения: settings.SSH_*
 #
 # 231122.01
 # + после ошибки теперь будет обрабатываться не всё заданное количество, а примерно в тысячу раз меньше = (settings.replication_batch_size // 1000) + 10
@@ -48,13 +57,28 @@ import platform
 import datetime
 import time
 import pymysql
+import paramiko
+import sshtunnel
 import configparser
 import json
 from pymysqlreplication import BinLogStreamReader
 from pymysqlreplication.event import QueryEvent, RotateEvent, FormatDescriptionEvent
-from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, create_unique_file, temp_open, reversed_lines, is_dml_event, event_type, get_dateid
+from binlog2sql_util import command_line_args, concat_sql_from_binlog_event, create_unique_file, temp_open, \
+    reversed_lines, is_dml_event, event_type, get_dateid
 from binlog2sql_util import binlog2sql_util_version
 from clickhouse_driver import Client
+#
+# Настраиваем предупреждения
+import warnings
+
+# "default" - распечатать первое появление соответствующих предупреждений для каждого местоположения (модуль + номер строки), где выдается предупреждение
+# "error" - превратить соответствующие предупреждения в исключения
+# "ignore" - никогда не печатать соответствующие предупреждения
+# "always" - всегда печатать соответствующие предупреждения
+# "module" - распечатать первое появление соответствующих предупреждений для каждого модуля, в котором выдается предупреждение (независимо от номера строки)
+# "once" - напечатать только первое появление соответствующих предупреждений, независимо от местоположения
+warnings.filterwarnings("ignore")
+#
 #
 #
 from pathlib import Path
@@ -67,36 +91,72 @@ except:  # from jupiter
     dv_path_main = dv_path_main.replace('jupyter/', '')
     dv_file_name = 'unknown_file'
 
+# # Snoop - это пакет Python, который печатает строки выполняемого кода вместе со значениями каждой переменной (декоратор #@snoop)
+# import snoop
+
+# # Heartrate - визуализирует выполнение программы на Python в режиме реального времени: http://localhost:9999
+# import heartrate
+# heartrate.trace(browser=True)
+
 # импортируем библиотеку для логирования
 from loguru import logger
 
-# logger.add("log/" + dv_file_name + ".json", level="DEBUG", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8", serialize=True)
-# logger.add("log/" + dv_file_name + ".json", level="WARNING", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8", serialize=True)
-# logger.add("log/" + dv_file_name + ".json", level="INFO", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8", serialize=True)
-# logger.add(settings.PATH_TO_LOG + dv_file_name + ".log", level="INFO", rotation="0.5 GB", retention='30 days', compression="gz", encoding="utf-8")
-logger.remove()  # отключаем логирование в консоль
-if settings.DEBUG is True:
-    logger.add(settings.PATH_TO_LOG + dv_file_name + ".log", level="DEBUG", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8")
-    logger.add(sys.stderr, level="DEBUG")
-else:
-    logger.add(settings.PATH_TO_LOG + dv_file_name + ".log", level="INFO", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8")
-    # logger.add(settings.PATH_TO_LOG + dv_file_name + ".log", level="INFO", rotation="10 MB", retention='30 days', compression="gz", encoding="utf-8")
-    logger.add(sys.stderr, level="INFO")
-logger.enable(dv_file_name)  # даем имя логированию
+
+def log_message_secret(message: str):
+    '''
+    Функция скрывает конфиденциальную информацию в строке, например такую конструкцию {'my_token': '1111111'} на такую {'my_token': 'secret'}
+    '''
+    message = re.sub(r"'([^']*token[^']*)':[ ]{0,1}'[^']*'", r"'\1': 'secret'", message, count=0)
+    message = re.sub(r"'([^']*passw[^']*)':[ ]{0,1}'[^']*'", r"'\1': 'secret'", message, count=0)
+    return message
+
+
+def log_format_secret(record):
+    '''
+    Задаем формат лога с заменой секретных данных (чтобы не слить в логах пароли и токены)
+    '''
+    record["extra"]["message_secret"] = log_message_secret(record["message"])
+    return "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{extra[message_secret]}</level>\n{exception}"
+
+
+def log_loguru_settings():
+    '''
+    Настройка логирования (куда логировать, что логировать, как логировать)
+    Вызывать функцию нужно в самом начале скрипта, чтобы сразу писать лог в правильное место
+    '''
+    # logger.add("log/" + dv_file_name + ".json", level="DEBUG", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8", serialize=True)
+    # logger.add("log/" + dv_file_name + ".json", level="WARNING", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8", serialize=True)
+    # logger.add("log/" + dv_file_name + ".json", level="INFO", rotation="00:00", retention='30 days', compression="gz", encoding="utf-8", serialize=True)
+    # logger.add(settings.PATH_TO_LOG + dv_file_name + ".log", level="INFO", rotation="0.5 GB", retention='30 days', compression="gz", encoding="utf-8")
+    logger.remove()  # отключаем стандартное логирование в консоль
+    if settings.DEBUG is True:
+        dv_logger_level = "DEBUG"
+    else:
+        dv_logger_level = "INFO"
+    logger.add(sys.stderr, level=dv_logger_level, format=log_format_secret, colorize=True)
+    dv_logger_file = settings.PATH_TO_LOG + '/' + dv_file_name + ".log"
+    logger.add(dv_logger_file, level=dv_logger_level, format=log_format_secret,
+               rotation="00:00", retention='30 days', compression="gz", encoding="utf-8", enqueue=True,
+               backtrace=True, diagnose=True, catch=True)
+
+
+# Настраиваем логирование
+log_loguru_settings()
+#
 logger.info(f'***')
 logger.info(f'BEGIN')
 try:
     # Получаем версию ОС
     logger.info(f'os.version = {platform.platform()}')
-except Exception as error:
+except Exception as ERROR:
     # Не удалось получить версию ОС
-    logger.error(f'ERROR - os.version: {error = }')
+    logger.error(f'ERROR - os.version: {ERROR = }')
 try:
     # Получаем версию питона
     logger.info(f'python.version = {sys.version}')
-except Exception as error:
+except Exception as ERROR:
     # Не удалось получить версию питона
-    logger.error(f'ERROR - python.version: {error = }')
+    logger.error(f'ERROR - python.version: {ERROR = }')
 logger.info(f'{dv_file_version = }')
 logger.info(f'{binlog2sql_util_version = }')
 logger.info(f'{dv_path_main = }')
@@ -104,6 +164,12 @@ logger.info(f'{dv_file_name = }')
 logger.info(f'{settings.PATH_TO_LIB = }')
 logger.info(f'{settings.PATH_TO_LOG = }')
 logger.info(f'{settings.DEBUG = }')
+try:
+    logger.info(f'{settings.SSH_MySQL_CONNECT = }')
+    dv_SSH_MySQL_CONNECT = settings.SSH_MySQL_CONNECT
+except:
+    logger.info(f'settings.SSH_MySQL_CONNECT = None')
+    dv_SSH_MySQL_CONNECT = False
 try:
     logger.info(f'{settings.EXECUTE_CLICKHOUSE = }')
     dv_EXECUTE_CLICKHOUSE = settings.EXECUTE_CLICKHOUSE
@@ -146,6 +212,23 @@ dv_find_text = re.compile(r'(\f|\n|\r|\t|\v|\0)')
 #
 #
 #
+#@snoop
+def create_ssh_tunnel():
+    '''
+    Функция создает SSH-туннель и возвращает данные о туннеле
+    в tunnel.local_bind_port будет порт созданного туннеля
+    '''
+    # Создание SSH-туннеля
+    tunnel = sshtunnel.SSHTunnelForwarder(
+        (settings.SSH_MySQL_HOST, settings.SSH_MySQL_PORT),
+        ssh_username=settings.SSH_MySQL_USERNAME,
+        ssh_password=settings.SSH_MySQL_PASSWORD,
+        remote_bind_address=(settings.MySQL_matomo_host, settings.MySQL_matomo_port)
+    )
+    tunnel.start()
+    return tunnel
+
+
 def get_now():
     '''
     Функция возвращает текущую дату и время в заданном формате
@@ -163,11 +246,13 @@ def get_second_between_now_and_datetime(in_datetime_str='2000-01-01 00:00:00'):
     '''
     logger.debug(f"get_second_between_now_and_datetime")
     tmp_datetime_start = datetime.datetime.strptime(in_datetime_str, '%Y-%m-%d %H:%M:%S')
-    tmp_now = datetime.datetime.strptime(datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'), '%Y-%m-%d %H:%M:%S')
+    tmp_now = datetime.datetime.strptime(datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'),
+                                         '%Y-%m-%d %H:%M:%S')
     tmp_seconds = int((tmp_now - tmp_datetime_start).total_seconds())
     return tmp_seconds
 
 
+#@snoop
 def get_disk_space():
     '''
     Функция возвращает информацию о свободном месте на диске в гигабайтах
@@ -197,6 +282,7 @@ def get_disk_space():
 
 class Binlog2sql(object):
 
+    #@snoop
     def __init__(self, connection_mysql_setting, connection_clickhouse_setting,
                  start_file=None, start_pos=None, end_file=None, end_pos=None,
                  start_time=None, stop_time=None, only_schemas=None, only_tables=None,
@@ -221,6 +307,7 @@ class Binlog2sql(object):
         if not start_file:
             self.connection = pymysql.connect(**self.conn_mysql_setting)
             with self.connection.cursor() as cursor:
+                cursor.execute("SET NAMES utf8")
                 cursor.execute("SHOW MASTER LOGS")
                 binlog_start_file = cursor.fetchone()[:1]
                 self.start_file = binlog_start_file[0]
@@ -251,6 +338,7 @@ class Binlog2sql(object):
         self.binlogList = []
         self.connection = pymysql.connect(**self.conn_mysql_setting)
         with self.connection.cursor() as cursor:
+            cursor.execute("SET NAMES utf8")
             cursor.execute("SHOW MASTER STATUS")
             self.eof_file, self.eof_pos = cursor.fetchone()[:2]
             if self.end_pos == 0:
@@ -272,7 +360,8 @@ class Binlog2sql(object):
             cursor.execute("SELECT @@server_id")
             self.server_id = cursor.fetchone()[0]
             if not self.server_id:
-                raise ValueError('missing server_id in %s:%s' % (self.conn_mysql_setting['host'], self.conn_mysql_setting['port']))
+                raise ValueError(
+                    'missing server_id in %s:%s' % (self.conn_mysql_setting['host'], self.conn_mysql_setting['port']))
             #
             # выводим список файлов бинлога, которые разрешили для обработки в этом запуске
             logger.debug(f"{self.server_id = }")
@@ -284,11 +373,15 @@ class Binlog2sql(object):
             logger.debug(f"{self.eof_pos = }")
             logger.debug(f"{self.binlogList = }")
 
+
+
+    #@snoop
     def clear_binlog(self, log_time):
         logger.debug(f"clear_binlog")
         try:
             logger.debug(f" {log_time = }")
-            tmp_LEAVE_BINARY_LOGS_IN_DAYS = datetime.datetime.today() - datetime.timedelta(days=settings.LEAVE_BINARY_LOGS_IN_DAYS)
+            tmp_LEAVE_BINARY_LOGS_IN_DAYS = datetime.datetime.today() - datetime.timedelta(
+                days=settings.LEAVE_BINARY_LOGS_IN_DAYS)
             logger.debug(f" {tmp_LEAVE_BINARY_LOGS_IN_DAYS = }")
             if log_time > tmp_LEAVE_BINARY_LOGS_IN_DAYS:
                 self.connection = pymysql.connect(**self.conn_mysql_setting)
@@ -301,6 +394,7 @@ class Binlog2sql(object):
         except Exception as ERROR:
             logger.error(f"{ERROR = }")
 
+    #@snoop
     def del_old_row_from_mysql(self):
         logger.info(f"удаление старых записей из MySQL - begin")
         try:
@@ -345,6 +439,7 @@ class Binlog2sql(object):
         except Exception as ERROR:
             logger.error(f"{ERROR = }")
 
+    #@snoop
     def execute_in_clickhouse(self, dv_sql_4insert_dict={}):
         '''
         Функция обрабатывает полученный словарь, создает из него инсерты, выполняет на базе КликХауса, актуализирует и возвращает словарь
@@ -373,6 +468,7 @@ class Binlog2sql(object):
         logger.info(f"execute_in_clickhouse: {ch_execute_count = } / {ch_execute_work_time_ms = }")
         return dv_sql_4insert_dict, dv_sql_for_execute_last
 
+    #@snoop
     def process_binlog(self):
         logger.debug(f"process_binlog")
         dv_is_end_process_binlog = False
@@ -383,13 +479,16 @@ class Binlog2sql(object):
         logger.debug(f"{self.start_file = }")
         logger.debug(f"{self.start_pos = }")
         logger.debug(f"{self.only_schemas = }")
+        logger.debug(f"{self.only_schemas = }")
         logger.debug(f"{self.only_tables = }")
         logger.debug(f"{self.only_dml = }")
         logger.debug(f"{self.sql_type = }")
         try:
             stream = BinLogStreamReader(connection_settings=self.conn_mysql_setting, server_id=self.server_id,
-                                        log_file=self.start_file, log_pos=self.start_pos, only_schemas=self.only_schemas,
+                                        log_file=self.start_file, log_pos=self.start_pos,
+                                        only_schemas=self.only_schemas,
                                         only_tables=self.only_tables, resume_stream=True, blocking=True,
+                                        # ignore_decode_errors=True,  # если раскомментировать, то могут появиться проблемы
                                         is_mariadb=False, freeze_schema=True)
             flag_last_event = False
             # dv_sql_for_execute_list = ''
@@ -401,6 +500,7 @@ class Binlog2sql(object):
             # to simplify code, we do not use flock for tmp_file.
             tmp_file = create_unique_file('%s.%s' % (self.conn_mysql_setting['host'], self.conn_mysql_setting['port']))
             with temp_open(tmp_file, "w") as f_tmp, self.connection.cursor() as cursor:
+                cursor.execute("SET NAMES utf8")
                 dv_tbl_not_delete = settings.CONST_TBL_NOT_DELETE_OLD
                 for binlog_event in stream:
                     logger.debug(f"***")
@@ -484,26 +584,23 @@ class Binlog2sql(object):
                                     dv_count_days = 0
                                     # Проверяем входит ли таблица из текущей строки в словарь исключенных из удаления таблиц.
                                     if binlog_event.table in list(dv_tbl_not_delete.keys()):
-                                        dv_date = row['values'].get(dv_tbl_not_delete[binlog_event.table]['col_date'], datetime.datetime.now())
+                                        dv_date = row['values'].get(dv_tbl_not_delete[binlog_event.table]['col_date'],
+                                                                    datetime.datetime.now())
                                         dv_count_days = (datetime.datetime.now() - dv_date).days
                                     if dv_count_days > 31:
                                         # Если запрос хочет удалить данные, которым больше Х дней, то такой запрос выполнять на итоговой базе не будем.
                                         # Не удаляем старые данные из итоговой БД!
                                         is_row_need = 0
                                         # Считаем сколько попыток удаления отклонили
-                                        dv_tbl_not_delete[binlog_event.table]['rejected count'] = dv_tbl_not_delete[binlog_event.table].get('rejected count',
-                                                                                                                                            0) + 1
-                                        logger.debug(f"ОТКЛОНЕНО УДАЛЕНИЕ СТРОКИ (создана {dv_count_days} дней назад): {sql}")
+                                        dv_tbl_not_delete[binlog_event.table]['rejected count'] = dv_tbl_not_delete[
+                                                                                                      binlog_event.table].get(
+                                            'rejected count',
+                                            0) + 1
+                                        logger.debug(
+                                            f"ОТКЛОНЕНО УДАЛЕНИЕ СТРОКИ (создана {dv_count_days} дней назад): {sql}")
                             except Exception as ERROR:
                                 logger.error(f"Проверка даты для строк delete: {ERROR = }")
                                 pass
-                            # # ТЕСТ На время тестирования все строки будем обрабатывать. После тестирования - УДАЛИТЬ!
-                            # if is_row_need == 0:
-                            #     # Текущую строку заливать в итоговую базу данных НЕ БУДЕМ
-                            #     logger.info(f" TEST!!! Текущую строку заливать в итоговую базу данных НЕ БУДЕМ")
-                            #     logger.debug(f"***")
-                            #     is_row_need = 1
-                            #     pass
                             if is_row_need == 0:
                                 # Текущую строку заливать в итоговую базу данных НЕ БУДЕМ
                                 logger.debug(f"Текущую строку заливать в итоговую базу данных НЕ БУДЕМ")
@@ -532,7 +629,8 @@ class Binlog2sql(object):
                                 self.log_id += 1
                                 dv_sql_log = "INSERT INTO `%s`.`log_replication` (`dateid`,`log_time`,`log_file`,`log_pos_start`,`log_pos_end`,`sql_type`)" \
                                              " VALUES (%s,'%s','%s',%s,%s,'%s');" \
-                                             % (log_shema, get_dateid(), log_time, stream.log_file, int(log_pos_start), int(log_pos_end), sql_type)
+                                             % (log_shema, get_dateid(), log_time, stream.log_file, int(log_pos_start),
+                                                int(log_pos_end), sql_type)
                                 #
                                 if (dv_replication_batch_sql == 0) or (
                                         sql_type not in ('INSERT', 'INS-UPD')) or (
@@ -548,7 +646,8 @@ class Binlog2sql(object):
                                     if len(dv_sql_4insert_dict) > 0:
                                         # попадаем сюда если dv_sql_4insert_dict не пустой
                                         logger.info(f"LINE_BY_LINE + BATCH | {len(dv_sql_4insert_dict) > 0 = }")
-                                        dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(dv_sql_4insert_dict=dv_sql_4insert_dict)
+                                        dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(
+                                            dv_sql_4insert_dict=dv_sql_4insert_dict)
                                     #
                                     # далее обрабатываем текущую строку
                                     with Client(**self.conn_clickhouse_setting) as ch_cursor:
@@ -570,7 +669,8 @@ class Binlog2sql(object):
                                     # пополняем список запросов и если требуется, то будем его обрабатывать
                                     # добавляем элемент в ключ словаря, если ключа нет, то сначала создаем его
                                     dv_sql_4insert_dict.setdefault(sql_4insert_table, []).append(sql_4insert_values)
-                                    dv_count_values_from_dv_sql_4insert_dict = sum(map(len, dv_sql_4insert_dict.values()))
+                                    dv_count_values_from_dv_sql_4insert_dict = sum(
+                                        map(len, dv_sql_4insert_dict.values()))
                                     if (dv_count_values_from_dv_sql_4insert_dict > dv_replication_batch_sql) or \
                                             (dv_count_sql_for_ch > dv_replication_batch_size):
                                         # попадаем сюда если в запрос собрали строк больше, чем replication_batch_sql
@@ -578,7 +678,8 @@ class Binlog2sql(object):
                                         # (это нужно чтобы не слишком много съедать памяти)
                                         logger.info(
                                             f"BATCH: {(dv_count_values_from_dv_sql_4insert_dict >= dv_replication_batch_sql) = } | {(dv_count_sql_for_ch >= dv_replication_batch_size) = }")
-                                        dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(dv_sql_4insert_dict=dv_sql_4insert_dict)
+                                        dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(
+                                            dv_sql_4insert_dict=dv_sql_4insert_dict)
                                 logger.debug(f"execute sql to clickhouse | end")
                     #
                     dv_f_work_munutes = round(int('{:.0f}'.format(1000 * (time.time() - dv_time_begin))) / (1000 * 60))
@@ -600,8 +701,10 @@ class Binlog2sql(object):
                     if dv_is_end_process_binlog is True:
                         if len(dv_sql_4insert_dict) > 0:
                             # попадаем сюда если есть в словаре инсерты (теоретически сюда попадать не должны вообще, всё корректно должно отрабатывать при создании батчей)
-                            logger.info(f"BATCH: {(dv_is_end_process_binlog is True) = } | {len(dv_sql_4insert_dict) > 0 = }")
-                            dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(dv_sql_4insert_dict=dv_sql_4insert_dict)
+                            logger.info(
+                                f"BATCH: {(dv_is_end_process_binlog is True) = } | {len(dv_sql_4insert_dict) > 0 = }")
+                            dv_sql_4insert_dict, dv_sql_for_execute_last = self.execute_in_clickhouse(
+                                dv_sql_4insert_dict=dv_sql_4insert_dict)
                         #
                         if dv_sql_log != '':
                             # если есть что записать в лог, то запишем
@@ -621,7 +724,8 @@ class Binlog2sql(object):
                 # Если из матомо удалили старую строку, а в кликхаусе её удалять не надо (см.логику), то выведем сообщение о количестве проигнорированных попыток удаления
                 for dv_tbl_line in list(dv_tbl_not_delete.keys()):
                     if dv_tbl_not_delete[dv_tbl_line].get('rejected count', 0) > 0:
-                        logger.info(f"ОТКЛОНЕНО УДАЛЕНИЕ из таблицы ClickHouse {dv_tbl_line} СТАРЫХ строк: {dv_tbl_not_delete[dv_tbl_line].get('rejected count', 0)} шт.")
+                        logger.info(
+                            f"ОТКЛОНЕНО УДАЛЕНИЕ из таблицы ClickHouse {dv_tbl_line} СТАРЫХ строк: {dv_tbl_not_delete[dv_tbl_line].get('rejected count', 0)} шт.")
                 #
                 # чистим старые логи
                 if settings.LEAVE_BINARY_LOGS_IN_DAYS > 0 and settings.LEAVE_BINARY_LOGS_IN_DAYS < 99:
@@ -635,6 +739,7 @@ class Binlog2sql(object):
         #
         except Exception as ERROR:
             f_status = 'ERROR'
+            logger.error(f"{ERROR = }")
             if dv_sql_for_execute_last != '':
                 f_text = f"'ERROR = LAST_SQL:\n\n{dv_sql_for_execute_last}\n\n{ERROR = }"
             else:
@@ -651,7 +756,8 @@ class Binlog2sql(object):
                         # если есть что выполнить, то выполняем
                         if dv_sql_for_execute_last != '':
                             with Client(**self.conn_clickhouse_setting) as ch_cursor:
-                                logger.info(f"settings.sql_execute_at_end_matomo2clickhouse_{dv_value_i}: {dv_sql_for_execute_last = }")
+                                logger.info(
+                                    f"settings.sql_execute_at_end_matomo2clickhouse_{dv_value_i}: {dv_sql_for_execute_last = }")
                                 # выполняем строку sql
                                 if dv_EXECUTE_CLICKHOUSE is True:
                                     ch_cursor.execute(dv_sql_for_execute_last)
@@ -662,6 +768,7 @@ class Binlog2sql(object):
                 f_status = 'SUCCESS'
                 f_text = f"{f_status}{f_text}"
             except Exception as ERROR:
+                logger.error(f"{ERROR = }")
                 if dv_sql_for_execute_last != '':
                     f_text = f"'ERROR = LAST_SQL:\n\n{dv_sql_for_execute_last}\n\n{ERROR = }"
                 else:
@@ -672,6 +779,7 @@ class Binlog2sql(object):
         pass
 
 
+#@snoop
 def get_ch_param_for_next(connection_clickhouse_setting):
     logger.debug(f"get_ch_param_for_next")
     log_id_max = -1
@@ -680,11 +788,13 @@ def get_ch_param_for_next(connection_clickhouse_setting):
     log_pos_end = 0
     try:
         dv_ch_client = Client(**connection_clickhouse_setting)
-        dv_ch_execute = dv_ch_client.execute(f"SELECT max(dateid) AS id_max FROM {settings.CH_matomo_dbname}.log_replication")
+        dv_ch_execute = dv_ch_client.execute(
+            f"SELECT max(dateid) AS id_max FROM {settings.CH_matomo_dbname}.log_replication")
         log_id_max = dv_ch_execute[0][0]
         logger.debug(f"{log_id_max = }")
-    except Exception as error:
-        raise error
+    except Exception as ERROR:
+        logger.error(f"{ERROR = }")
+        raise ERROR
     #
     try:
         ch_result = dv_ch_client.execute(
@@ -742,10 +852,12 @@ if __name__ == '__main__':
             dv_file_lib_time = next(dv_file_lib_open).strip()
             dv_file_lib_open.close()
             dv_file_old_start = datetime.datetime.strptime(dv_file_lib_time, '%Y-%m-%d %H:%M:%S')
-            tmp_now = datetime.datetime.strptime(datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'), '%Y-%m-%d %H:%M:%S')
+            tmp_now = datetime.datetime.strptime(
+                datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S'), '%Y-%m-%d %H:%M:%S')
             tmp_seconds = int((tmp_now - dv_file_old_start).total_seconds())
             if tmp_seconds < settings_replication_max_minutes * 2 * 60:
-                raise Exception(f"Уже выполняется c {dv_file_lib_time} - перед запуском дождитесь завершения предыдущего процесса!")
+                raise Exception(
+                    f"Уже выполняется c {dv_file_lib_time} - перед запуском дождитесь завершения предыдущего процесса!")
         else:
             dv_file_lib_open = open(dv_file_lib_path, mode="w", encoding='utf-8')
             dv_file_lib_time = f"{datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')}"
@@ -761,26 +873,27 @@ if __name__ == '__main__':
             in_args = settings.args_for_mysql_to_clickhouse[1:]
         # parse args
         args = command_line_args(in_args)
-        # conn_mysql_setting = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password, 'charset': 'utf8'}
-        conn_mysql_setting = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password, 'charset': 'utf8mb4'}
+        #
+        if dv_SSH_MySQL_CONNECT is True:
+            # Стартуем SSH-туннель
+            tunnel = create_ssh_tunnel()
+            conn_mysql_setting = {'host': args.host, 'port': tunnel.local_bind_port,
+                                  'user': args.user, 'passwd': args.password, 'charset': 'utf8mb4'}
+            logger.info(f"SSH {tunnel.local_bind_port = }")
+        else:
+            # conn_mysql_setting = {'host': args.host, 'port': args.port, 'user': args.user, 'passwd': args.password, 'charset': 'utf8'}
+            conn_mysql_setting = {'host': args.host, 'port': args.port,
+                                  'user': args.user, 'passwd': args.password, 'charset': 'utf8mb4'}
         conn_clickhouse_setting = settings.CH_connect
         #
         log_id = 0
         if args.start_file == '':
-            log_id, log_time, log_file, log_pos_end = get_ch_param_for_next(connection_clickhouse_setting=conn_clickhouse_setting)
-            # print(f"{log_id = }")
-            # print(f"{log_time = }")
-            # print(f"{log_file = }")
-            # print(f"{log_pos_end = }")
+            log_id, log_time, log_file, log_pos_end = get_ch_param_for_next(
+                connection_clickhouse_setting=conn_clickhouse_setting)
             if log_file != '':
                 args.start_file = log_file
                 args.start_pos = log_pos_end
                 args.start_time = log_time
-        #
-        # print('***')
-        # print(f"{args = }")
-        # print('***')
-        #
         try:
             logger.info(f"binlog_datetime_start = {args.start_time}")
         except:
@@ -805,6 +918,7 @@ if __name__ == '__main__':
         #
         os.remove(dv_file_lib_path)
     except Exception as ERROR:
+        logger.error(f"{ERROR = }")
         dv_for_send_txt_type = 'ERROR'
         dv_for_send_text = f"{ERROR = }"
     finally:
@@ -841,7 +955,8 @@ if __name__ == '__main__':
                     # Чтобы слишком часто не спамить в телеграм сначала проверим разрешено ли именно сейчас отправлять сообщение
                     try:
                         # проверяем нужно ли отправлять успех в телеграм
-                        if get_second_between_now_and_datetime(dv_cfg_last_send_tlg_success) > settings.SEND_SUCCESS_REPEATED_NOT_EARLIER_THAN_MINUTES * 60:
+                        if get_second_between_now_and_datetime(
+                                dv_cfg_last_send_tlg_success) > settings.SEND_SUCCESS_REPEATED_NOT_EARLIER_THAN_MINUTES * 60:
                             dv_is_SEND_TELEGRAM_success = True
                             # актуализируем значение конфига
                             dv_cfg_last_send_tlg_success = get_now()
@@ -853,7 +968,8 @@ if __name__ == '__main__':
                 #
                 # пытаться отправить будем только если предыдущие проверки подтвердили необходимость отправки
                 if dv_is_SEND_TELEGRAM_success is True:
-                    settings.f_telegram_send_message(tlg_bot_token=settings.TLG_BOT_TOKEN, tlg_chat_id=settings.TLG_CHAT_FOR_SEND,
+                    settings.f_telegram_send_message(tlg_bot_token=settings.TLG_BOT_TOKEN,
+                                                     tlg_chat_id=settings.TLG_CHAT_FOR_SEND,
                                                      txt_name=f"matomo2clickhouse {dv_file_version}",
                                                      txt_type=dv_for_send_txt_type,
                                                      txt_to_send=f"{dv_for_send_text}",
@@ -869,7 +985,8 @@ if __name__ == '__main__':
             pass
         try:
             # получаем позицию binlog-а, до которой обработали (для статистики)
-            log_id, dv_binlog_datetime_end, log_file, log_pos_end = get_ch_param_for_next(connection_clickhouse_setting=conn_clickhouse_setting)
+            log_id, dv_binlog_datetime_end, log_file, log_pos_end = get_ch_param_for_next(
+                connection_clickhouse_setting=conn_clickhouse_setting)
             logger.info(f"binlog_datetime_end = {dv_binlog_datetime_end}")
         except:
             pass

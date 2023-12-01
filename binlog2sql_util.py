@@ -295,10 +295,12 @@ def generate_sql_pattern(binlog_event, row=None, for_clickhouse=False):
         sql_type = 'DELETE'
         if for_clickhouse is True:
             template = 'ALTER TABLE `{0}`.`{1}` DELETE WHERE {2} SETTINGS mutations_sync = 1;'.format(
-                get_schema_clickhouse(binlog_event.schema), binlog_event.table, ' AND '.join(map(compare_items, row['values'].items())))
+                get_schema_clickhouse(binlog_event.schema), binlog_event.table,
+                ' AND '.join(map(compare_items, row['values'].items())))
         else:
             template = 'DELETE FROM `{0}`.`{1}` WHERE {2} LIMIT 1;'.format(
-                get_schema_clickhouse(binlog_event.schema), binlog_event.table, ' AND '.join(map(compare_items, row['values'].items())))
+                get_schema_clickhouse(binlog_event.schema), binlog_event.table,
+                ' AND '.join(map(compare_items, row['values'].items())))
         values = map(fix_object, row['values'].values())
     elif isinstance(binlog_event, UpdateRowsEvent):
         sql_type = 'UPDATE'
@@ -344,7 +346,8 @@ def generate_sql_pattern(binlog_event, row=None, for_clickhouse=False):
                 ' AND '.join(map(compare_items, row['before_values'].items()))
             )
             values = map(fix_object, list(row['after_values'].values()) + list(row['before_values'].values()))
-    return {'sql_type': sql_type, 'template': template, 'sql_4insert_table': sql_4insert_table, 'sql_4insert_values': sql_4insert_values,
+    return {'sql_type': sql_type, 'template': template, 'sql_4insert_table': sql_4insert_table,
+            'sql_4insert_values': sql_4insert_values,
             'values': list(values)}
 
 

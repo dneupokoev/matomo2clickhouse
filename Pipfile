@@ -9,11 +9,15 @@ autopep8 = "*"
 loguru = "*"
 clickhouse-driver = "*"
 clickhouse-mysql = "*"
-mysql-replication = "*"
 argparse = "*"
 pytelegrambotapi = "*"
 jupyter = "*"
 ipykernel = "*"
+paramiko = "*"
+sshtunnel = "*"
+snoop = "*"
+heartrate = "*"
+mysql-replication = "==0.40"
 
 [dev-packages]
 
