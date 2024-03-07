@@ -242,7 +242,7 @@ crontab -e
   INSERT INTO matomo.log_replication (dateid, created_at, sql_type, log_time, log_file, log_pos_start, log_pos_end)
   VALUES (17097906301653379, '2024-03-07 05:50:30', 'INS-UPD', '2024-03-06 20:43:16', 'mysql-bin.009445', 0, 0);
   
-  dateid - должен быть МАКСИМАЛЬНЫЙ + 1 (именно по этому полю идет поиска конечной точки, чтобы продолжать)
+  dateid - должен быть МАКСИМАЛЬНЫЙ + 1 (по этому полю идет поиск конечной точки, чтобы продолжать)
   log_file - следующий после нашего "глючного" mysql-bin.009444
   log_pos_start = 0
   log_pos_end = 0
