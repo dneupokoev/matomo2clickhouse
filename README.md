@@ -256,7 +256,7 @@ crontab -e
 
 
 
-### Полключаем базу из MySQL в ClickHouse для обмена данными между ClickHouse и MySQL
+### Подключаем базу из MySQL в ClickHouse для обмена данными между ClickHouse и MySQL
 
 Официальная инструкция от ClickHouse: https://clickhouse.com/docs/ru/engines/database-engines/mysql
 
