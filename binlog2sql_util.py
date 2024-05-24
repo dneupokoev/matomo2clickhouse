@@ -5,7 +5,10 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
-binlog2sql_util_version = '231117.01'
+binlog2sql_util_version = '240524.01'
+#
+# 240524.01
+# + убрал в settings.py "SETTINGS mutations_sync = 1" из sql, которые выполняются в самом конце, т.к. они стали отваливаться по таймауту, а смысла ждать ответа нет (выполнится нормально в фоне)
 #
 # 231117.01
 # + удалил "лишнее" и устаревшее из кода, изменил работу с DELETE
