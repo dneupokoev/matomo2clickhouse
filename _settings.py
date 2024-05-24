@@ -5,6 +5,12 @@
 # Replication Matomo from MySQL to ClickHouse
 # Репликация Matomo: переливка данных из MySQL в ClickHouse
 #
+# 240524.01
+# + убрал SETTINGS mutations_sync из sql, которые выполняютсмя в самом конце, т.к. они стали отваливаться по таймауту, а смысла ждать ответа нет (выполнится нормально в фоне)
+#
+# 231123.01
+# + добавил возможность подключения к базе данных MySQL через SSH (дополнительные параметры подключения: settings.SSH_*)
+#
 # 231116.02
 # + добавил параметр settings.CONST_TBL_FOR_DELETE_OLD - словарь с запросами для удаления старых записей из таблиц БД MySQL.matomo (чтобы облегчить базу MySQL)
 #
@@ -248,7 +254,7 @@ sql_execute_at_end_matomo2clickhouse = [
         ) t1 ON t2.idlink_va = t1.idlink_va
         WHERE t2.dateid_for_del <> t1.dateid_max
     )
-    SETTINGS mutations_sync = 1;
+    /* SETTINGS mutations_sync = 1*/;
     '''.format(CH_matomo_dbname=CH_matomo_dbname, dv_days_ago_start=14, dv_days_ago_finish=0),
     '''
     /* делает выборку dateid, которые нужно удалить, отправляет на удаление и ждет окончания мутации */
@@ -276,7 +282,7 @@ sql_execute_at_end_matomo2clickhouse = [
         ) t1 ON t2.idvisit = t1.idvisit
         WHERE t2.dateid_for_del <> t1.dateid_max
     )
-    SETTINGS mutations_sync = 1;
+    /* SETTINGS mutations_sync = 1*/;
     '''.format(CH_matomo_dbname=CH_matomo_dbname, dv_days_ago_start=14, dv_days_ago_finish=0),
 ]
 #
